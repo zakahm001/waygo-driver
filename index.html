@@ -48,24 +48,14 @@
     .bni{display:flex;flex-direction:column;align-items:center;gap:3px;color:#4a6090;font-size:10px;cursor:pointer;border:none;background:none}
     .bni.active{color:#fbbf24}
     .bni-icon{font-size:20px}
-    .bspace{height:80px}
     .page{padding:20px;flex:1;overflow-y:auto;background:#eef1f8;color:#0d1b3e}
     .card{background:white;border-radius:14px;padding:18px;margin-bottom:14px;border:1px solid #d0d7ea;box-shadow:0 1px 4px rgba(0,0,0,.06)}
     .stitle{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
     .btn{padding:14px;border-radius:10px;font-size:15px;font-weight:700;border:none;cursor:pointer;width:100%;text-align:center;transition:all .2s}
-    .btn-primary{background:#0d1b3e;color:#fbbf24}
-    .btn-success{background:#15803d;color:white}
     .btn-danger{background:#dc2626;color:white}
     .btn-blue{background:#1a56db;color:white}
     .btn-yellow{background:#fbbf24;color:#0d1b3e}
-    .btn-sm{padding:8px 16px;font-size:13px;width:auto;border-radius:8px}
-    .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
-    .b-green{background:#dcfce7;color:#15803d;border:1px solid #86efac}
-    .b-yellow{background:#fef3c7;color:#d97706;border:1px solid #fde68a}
-    .b-red{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
-    .b-blue{background:#dbeafe;color:#1a56db;border:1px solid #93c5fd}
-    .b-gray{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}
-    .b-purple{background:#ede9fe;color:#7c3aed;border:1px solid #ddd6fe}
+    .btn-success{background:#15803d;color:white}
     .booking-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;display:none;align-items:center;justify-content:center;padding:20px}
     .booking-overlay.show{display:flex;animation:slideUp .3s ease}
     @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
@@ -85,30 +75,14 @@
     .my-marker{position:absolute;width:40px;height:40px;border-radius:50%;background:#0d1b3e;border:4px solid #fbbf24;display:flex;align-items:center;justify-content:center;font-size:18px;transform:translate(-50%,-50%);transition:left 1s ease,top 1s ease;box-shadow:0 4px 12px rgba(0,0,0,.4)}
     .trip-card{background:white;border-radius:12px;padding:16px;margin-bottom:10px;border:1px solid #d0d7ea}
     .trip-active{border-color:#15803d;box-shadow:0 0 0 3px #dcfce7}
-    .trip-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
-    .trip-ref{font-size:13px;font-weight:700;color:#1a56db}
     .trip-route{font-size:14px;font-weight:600;color:#0d1b3e;margin-bottom:4px}
-    .chatbox{height:200px;overflow-y:auto;padding:8px 0;display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
-    .cmsg{display:flex;gap:8px;align-items:flex-end}
-    .cmsg.mine{flex-direction:row-reverse}
-    .cav{width:28px;height:28px;border-radius:50%;background:#0d1b3e;color:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;flex-shrink:0}
-    .cbubble{max-width:72%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.4}
-    .cmsg.mine .cbubble{background:#0d1b3e;color:#fbbf24;border-radius:12px 12px 4px 12px}
-    .cmsg.other .cbubble{background:#f1f5f9;color:#0d1b3e;border-radius:12px 12px 12px 4px}
-    .cinput-row{display:flex;gap:8px}
-    .cinput{flex:1;padding:9px 12px;border-radius:24px;border:1px solid #d0d7ea;background:#f8fafc;font-size:13px;color:#0d1b3e;outline:none}
-    .csend{width:38px;height:38px;border-radius:50%;background:#0d1b3e;border:none;color:#fbbf24;font-size:15px;cursor:pointer;flex-shrink:0}
-    .moverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:flex-end;justify-content:center}
-    .moverlay.open{display:flex}
-    .mbox{background:white;border-radius:20px 20px 0 0;padding:24px 20px;width:100%;max-width:500px;max-height:88vh;overflow-y:auto;color:#0d1b3e}
+    .trip-ref{font-size:13px;font-weight:700;color:#1a56db}
     .toast{position:fixed;bottom:90px;left:20px;right:20px;background:#fbbf24;color:#0d1b3e;padding:14px 20px;border-radius:12px;font-size:14px;font-weight:bold;text-align:center;z-index:300;display:none}
     .toast.show{display:block}
     .infobox{border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px}
-    .ib-yellow{background:#fef3c7;border:1px solid #fde68a;color:#d97706}
     .ib-blue{background:#dbeafe;border:1px solid #93c5fd;color:#1a56db}
     .driver-header{background:linear-gradient(135deg,#0d1b3e,#1a3066);padding:24px 20px;display:flex;align-items:center;gap:16px}
     .driver-avatar{width:60px;height:60px;border-radius:50%;background:#fbbf24;color:#0d1b3e;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:bold}
-    .list-item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #f8fafc}
   </style>
 </head>
 <body>
@@ -191,7 +165,7 @@ function playBookingAlert() {
   const osc = audioCtx.createOscillator();
   const gain = audioCtx.createGain();
   osc.type = 'square';
-  osc.frequency.setValueAtTime(880, audioCtx.currentTime); // High A
+  osc.frequency.setValueAtTime(880, audioCtx.currentTime); 
   osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.5);
   gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
   gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
@@ -261,7 +235,7 @@ function connectSocket() {
 
 function triggerBookingAlert(booking) {
   pendingBooking = booking;
-  playBookingAlert(); // Trigger Audio
+  playBookingAlert();
   if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
 
   document.getElementById('popupRoute').textContent = `${booking.from_address} → ${booking.to_address}`;
@@ -270,17 +244,21 @@ function triggerBookingAlert(booking) {
   document.getElementById('bookingOverlay').classList.add('show');
   
   let time = 30;
-  clearInterval(popupTimerInterval);
+  if (popupTimerInterval) clearInterval(popupTimerInterval);
+
   popupTimerInterval = setInterval(() => {
     time--; 
     document.getElementById('popupTimer').textContent = time;
-    if(time % 2 === 0) playBookingAlert(); // Beep every 2 seconds
+    // Only beep if pendingBooking still exists
+    if(time % 2 === 0 && pendingBooking) playBookingAlert();
     if(time <= 0) declineBooking();
   }, 1000);
 }
 
 async function acceptBooking() {
-  clearInterval(popupTimerInterval);
+  // STOP SOUND IMMEDIATELY
+  if (popupTimerInterval) { clearInterval(popupTimerInterval); popupTimerInterval = null; }
+  
   try {
     const res = await fetch(`${API}/bookings/${pendingBooking.id}/assign`, {
       method: 'PATCH',
@@ -293,11 +271,15 @@ async function acceptBooking() {
       document.getElementById('bookingOverlay').classList.remove('show'); 
       showTab(0); 
     }
-  } catch(e) { console.log('Accept fail'); }
+  } catch(e) { 
+    console.log('Accept fail');
+    document.getElementById('bookingOverlay').classList.remove('show');
+  }
 }
 
 function declineBooking() {
-  clearInterval(popupTimerInterval);
+  // STOP SOUND IMMEDIATELY
+  if (popupTimerInterval) { clearInterval(popupTimerInterval); popupTimerInterval = null; }
   document.getElementById('bookingOverlay').classList.remove('show');
   pendingBooking = null;
 }
@@ -352,6 +334,11 @@ function renderHome() {
     </div>`;
 }
 
+async function completeTrip() {
+  await fetch(`${API}/bookings/${activeBooking.id}/cancel`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status:'completed'})});
+  activeBooking = null; showToast('Resa klar!'); showTab(0);
+}
+
 function renderProfile() {
   return `
     <div class="driver-header"><div class="driver-avatar">${driver.name[0]}</div><div style="color:white"><strong>${driver.name}</strong><br>${driver.plate}</div></div>
@@ -362,7 +349,10 @@ function renderProfile() {
 }
 
 function logout() { localStorage.removeItem('waygo_driver'); location.reload(); }
-function showToast(msg) { /* logic */ }
+function showToast(msg) {
+  const t = document.getElementById('toast');
+  t.textContent = msg; t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3000);
+}
 </script>
 </body>
 </html>
