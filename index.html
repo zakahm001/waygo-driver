@@ -40,31 +40,75 @@
     .toggle-thumb{position:absolute;width:22px;height:22px;border-radius:50%;background:white;top:3px;left:3px;transition:left .3s;box-shadow:0 2px 4px rgba(0,0,0,.3)}
     .toggle-track.on .toggle-thumb{left:27px}
     .toggle-label{font-size:12px;font-weight:700;color:#4a6090}
-    .bnav{position:fixed;bottom:0;left:0;right:0;background:#0d1b3e;display:flex;justify-content:space-around;padding:10px 0;border-top:1px solid #1a2f5e;z-index:100}
-    .bni{display:flex;flex-direction:column;align-items:center;gap:3px;color:#4a6090;font-size:10px;cursor:pointer;border:none;background:none}
-    .bni.active{color:#fbbf24}
-    .page{padding:20px;flex:1;overflow-y:auto;background:#eef1f8;color:#0d1b3e}
-    .stitle{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
-    .btn{padding:14px;border-radius:10px;font-size:15px;font-weight:700;border:none;cursor:pointer;width:100%;text-align:center;transition:all .2s;margin-bottom:10px}
-    .btn-primary{background:#0d1b3e;color:#fbbf24}
-    .btn-danger{background:#dc2626;color:white}
-    .btn-yellow{background:#fbbf24;color:#0d1b3e}
-    .booking-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;display:none;align-items:center;justify-content:center;padding:20px}
-    .booking-overlay.show{display:flex}
-    .booking-popup{background:white;border-radius:20px;padding:24px;width:100%;max-width:420px;color:#0d1b3e}
-    .popup-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
-    .popup-new{background:#dc2626;color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700}
-    .popup-timer{font-size:28px;font-weight:800;color:#dc2626}
-    .popup-btns{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:20px}
-    .popup-accept{background:#15803d;color:white;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:800}
-    .popup-decline{background:#f1f5f9;color:#64748b;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:700}
-    .driver-header{background:linear-gradient(135deg,#0d1b3e,#1a3066);padding:24px 20px;display:flex;align-items:center;gap:16px}
-    .driver-avatar{width:60px;height:60px;border-radius:50%;background:#fbbf24;color:#0d1b3e;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:bold}
     .status-pill{padding:5px 12px;border-radius:20px;font-size:12px;font-weight:700}
     .pill-online{background:#dcfce7;color:#15803d}
     .pill-offline{background:#1a2f5e;color:#4a6090}
+    .pill-busy{background:#dbeafe;color:#1a56db}
+    .bnav{position:fixed;bottom:0;left:0;right:0;background:#0d1b3e;display:flex;justify-content:space-around;padding:10px 0;border-top:1px solid #1a2f5e;z-index:100}
+    .bni{display:flex;flex-direction:column;align-items:center;gap:3px;color:#4a6090;font-size:10px;cursor:pointer;border:none;background:none}
+    .bni.active{color:#fbbf24}
+    .bni-icon{font-size:20px}
+    .bspace{height:80px}
+    .page{padding:20px;flex:1;overflow-y:auto;background:#eef1f8;color:#0d1b3e}
+    .card{background:white;border-radius:14px;padding:18px;margin-bottom:14px;border:1px solid #d0d7ea;box-shadow:0 1px 4px rgba(0,0,0,.06)}
+    .stitle{font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:1.5px;margin-bottom:10px}
+    .btn{padding:14px;border-radius:10px;font-size:15px;font-weight:700;border:none;cursor:pointer;width:100%;text-align:center;transition:all .2s}
+    .btn-primary{background:#0d1b3e;color:#fbbf24}
+    .btn-success{background:#15803d;color:white}
+    .btn-danger{background:#dc2626;color:white}
+    .btn-blue{background:#1a56db;color:white}
+    .btn-yellow{background:#fbbf24;color:#0d1b3e}
+    .btn-sm{padding:8px 16px;font-size:13px;width:auto;border-radius:8px}
+    .badge{padding:3px 10px;border-radius:20px;font-size:11px;font-weight:700;white-space:nowrap}
+    .b-green{background:#dcfce7;color:#15803d;border:1px solid #86efac}
+    .b-yellow{background:#fef3c7;color:#d97706;border:1px solid #fde68a}
+    .b-red{background:#fee2e2;color:#dc2626;border:1px solid #fecaca}
+    .b-blue{background:#dbeafe;color:#1a56db;border:1px solid #93c5fd}
+    .b-gray{background:#f1f5f9;color:#64748b;border:1px solid #e2e8f0}
+    .b-purple{background:#ede9fe;color:#7c3aed;border:1px solid #ddd6fe}
+    .booking-overlay{position:fixed;inset:0;background:rgba(0,0,0,.85);z-index:500;display:none;align-items:center;justify-content:center;padding:20px}
+    .booking-overlay.show{display:flex;animation:slideUp .3s ease}
+    @keyframes slideUp{from{transform:translateY(100%)}to{transform:translateY(0)}}
+    .booking-popup{background:white;border-radius:20px;padding:24px;width:100%;max-width:420px;color:#0d1b3e}
+    .popup-header{display:flex;justify-content:space-between;align-items:center;margin-bottom:16px}
+    .popup-new{background:#dc2626;color:white;padding:4px 12px;border-radius:20px;font-size:12px;font-weight:700;animation:blink 1s infinite}
+    @keyframes blink{0%,100%{opacity:1}50%{opacity:.5}}
+    .popup-timer{font-size:28px;font-weight:800;color:#dc2626;font-family:monospace}
+    .popup-route{font-size:16px;font-weight:700;color:#0d1b3e;margin-bottom:6px}
+    .popup-fare{font-size:28px;font-weight:800;color:#0d1b3e;margin-bottom:16px}
+    .popup-btns{display:grid;grid-template-columns:1fr 1fr;gap:12px}
+    .popup-accept{background:#15803d;color:white;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:800;cursor:pointer;animation:pulse-green 1s infinite}
+    @keyframes pulse-green{0%,100%{box-shadow:0 0 0 0 rgba(21,128,61,.4)}50%{box-shadow:0 0 0 12px rgba(21,128,61,0)}}
+    .popup-decline{background:#f1f5f9;color:#64748b;border:none;border-radius:12px;padding:16px;font-size:16px;font-weight:700;cursor:pointer}
+    .driver-map{background:#d4e8d4;border-radius:12px;height:180px;position:relative;overflow:hidden;margin-bottom:14px;border:1px solid #b8d4b8}
+    .map-bg{position:absolute;inset:0;background-image:linear-gradient(#b8d4b8 1px,transparent 1px),linear-gradient(90deg,#b8d4b8 1px,transparent 1px);background-size:25px 25px;opacity:.5}
+    .my-marker{position:absolute;width:40px;height:40px;border-radius:50%;background:#0d1b3e;border:4px solid #fbbf24;display:flex;align-items:center;justify-content:center;font-size:18px;transform:translate(-50%,-50%);transition:left 1s ease,top 1s ease;box-shadow:0 4px 12px rgba(0,0,0,.4)}
+    .trip-card{background:white;border-radius:12px;padding:16px;margin-bottom:10px;border:1px solid #d0d7ea}
+    .trip-active{border-color:#15803d;box-shadow:0 0 0 3px #dcfce7}
+    .trip-top{display:flex;justify-content:space-between;align-items:center;margin-bottom:8px}
+    .trip-ref{font-size:13px;font-weight:700;color:#1a56db}
+    .trip-route{font-size:14px;font-weight:600;color:#0d1b3e;margin-bottom:4px}
+    .chatbox{height:200px;overflow-y:auto;padding:8px 0;display:flex;flex-direction:column;gap:8px;margin-bottom:10px}
+    .cmsg{display:flex;gap:8px;align-items:flex-end}
+    .cmsg.mine{flex-direction:row-reverse}
+    .cav{width:28px;height:28px;border-radius:50%;background:#0d1b3e;color:#fbbf24;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:bold;flex-shrink:0}
+    .cbubble{max-width:72%;padding:8px 12px;border-radius:12px;font-size:13px;line-height:1.4}
+    .cmsg.mine .cbubble{background:#0d1b3e;color:#fbbf24;border-radius:12px 12px 4px 12px}
+    .cmsg.other .cbubble{background:#f1f5f9;color:#0d1b3e;border-radius:12px 12px 12px 4px}
+    .cinput-row{display:flex;gap:8px}
+    .cinput{flex:1;padding:9px 12px;border-radius:24px;border:1px solid #d0d7ea;background:#f8fafc;font-size:13px;color:#0d1b3e;outline:none}
+    .csend{width:38px;height:38px;border-radius:50%;background:#0d1b3e;border:none;color:#fbbf24;font-size:15px;cursor:pointer;flex-shrink:0}
+    .moverlay{display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:200;align-items:flex-end;justify-content:center}
+    .moverlay.open{display:flex}
+    .mbox{background:white;border-radius:20px 20px 0 0;padding:24px 20px;width:100%;max-width:500px;max-height:88vh;overflow-y:auto;color:#0d1b3e}
     .toast{position:fixed;bottom:90px;left:20px;right:20px;background:#fbbf24;color:#0d1b3e;padding:14px 20px;border-radius:12px;font-size:14px;font-weight:bold;text-align:center;z-index:300;display:none}
     .toast.show{display:block}
+    .infobox{border-radius:8px;padding:10px 12px;font-size:12px;margin-bottom:10px}
+    .ib-yellow{background:#fef3c7;border:1px solid #fde68a;color:#d97706}
+    .ib-blue{background:#dbeafe;border:1px solid #93c5fd;color:#1a56db}
+    .driver-header{background:linear-gradient(135deg,#0d1b3e,#1a3066);padding:24px 20px;display:flex;align-items:center;gap:16px}
+    .driver-avatar{width:60px;height:60px;border-radius:50%;background:#fbbf24;color:#0d1b3e;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:bold}
+    .list-item{display:flex;justify-content:space-between;align-items:center;padding:12px 0;border-bottom:1px solid #f8fafc}
   </style>
 </head>
 <body>
@@ -72,6 +116,7 @@
 <div class="screen active" id="sLoad">
   <div class="load-logo">▲</div>
   <div class="load-name">WAYGO</div>
+  <div class="load-sub">Förarapp · Driver App</div>
   <div class="dots"><div class="dot"></div><div class="dot"></div><div class="dot"></div></div>
 </div>
 
@@ -106,6 +151,7 @@
   <div class="bnav">
     <button class="bni active" onclick="showTab(0)">🏠<span>Hem</span></button>
     <button class="bni" onclick="showTab(1)">📋<span>Resor</span></button>
+    <button class="bni" onclick="showTab(2)">💬<span>Chatt</span></button>
     <button class="bni" onclick="showTab(3)">👤<span>Profil</span></button>
   </div>
 </div>
@@ -116,11 +162,26 @@
       <div class="popup-new">🚨 NY BOKNING!</div>
       <div class="popup-timer" id="popupTimer">30</div>
     </div>
-    <div id="popupRoute" style="font-weight:bold; margin-bottom:10px;"></div>
-    <div id="popupFare" style="font-size:24px; font-weight:bold; margin-bottom:20px;"></div>
+    <div class="popup-route" id="popupRoute"></div>
+    <div class="popup-fare" id="popupFare"></div>
+    <div class="infobox ib-blue" id="popupPayment"></div>
     <div class="popup-btns">
       <button class="popup-decline" onclick="declineBooking()">✕ Neka</button>
       <button class="popup-accept" onclick="acceptBooking()">✓ Acceptera</button>
+    </div>
+  </div>
+</div>
+
+<div class="moverlay" id="chatModal">
+  <div class="mbox">
+    <div style="display:flex;justify-content:space-between;margin-bottom:14px">
+      <div id="chatModalTitle" style="font-weight:bold">Chatt</div>
+      <button onclick="closeMod('chatModal')" style="border:none;background:none;font-size:20px">✕</button>
+    </div>
+    <div class="chatbox" id="chatModalMessages"></div>
+    <div class="cinput-row">
+      <input class="cinput" id="chatModalInput" placeholder="Skriv...">
+      <button class="csend" onclick="sendChatModal()">➤</button>
     </div>
   </div>
 </div>
@@ -130,27 +191,193 @@
 <script>
 const API = 'https://16.16.153.106.sslip.io';
 let driver = null, isOnline = false, activeBooking = null, socket = null, currentTab = 0;
-let audioCtx = null;
+let currentLat = 59.3293, currentLng = 18.0686, popupTimerInterval = null, pendingBooking = null;
 
-// FIX 2: Updated DEMO_DRIVERS
 const DEMO_DRIVERS = [
-  { id: 1, name: 'Erik Lindström', email: 'erik@waygo.se', password: 'driver123', plate: 'ABC 123', taxiNr: 'TL-4421', city: 'Stockholm', rating: 4.9, trips_today: 0, earnings_today: 0 },
-  { id: 2, name: 'Amina Warsame', email: 'amina@waygo.se', password: 'driver123', plate: 'DEF 456', taxiNr: 'TL-2209', city: 'Göteborg', rating: 4.8, trips_today: 0, earnings_today: 0 },
-  { id: 3, name: 'Lars Petersson', email: 'lars@waygo.se', password: 'driver123', plate: 'GHI 789', taxiNr: 'TL-8834', city: 'Malmö', rating: 4.7, trips_today: 0, earnings_today: 0 }
+  { id:1, name:'Erik Lindström', email:'erik@waygo.se', password:'driver123', plate:'ABC 123', taxiNr:'TL-4421', rating:4.9 },
+  { id:2, name:'Amina Warsame', email:'amina@waygo.se', password:'driver123', plate:'DEF 456', taxiNr:'TL-2209', rating:4.8 }
 ];
 
-// FIX 1: Initialize audio on interaction
-document.addEventListener('touchstart', () => { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }, { once: false });
-document.addEventListener('click', () => { if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }, { once: false });
+// --- UPDATED LOADING LOGIC ---
+window.addEventListener('load', () => {
+  setTimeout(() => {
+    try {
+      const saved = localStorage.getItem('waygo_driver');
+      // If we have saved data, try to parse and enter
+      if (saved) {
+        driver = JSON.parse(saved);
+        enterApp();
+      } else {
+        showScreen('sLogin');
+      }
+    } catch(e) {
+      console.error('Init error:', e);
+      // If JSON parse fails or other error, clear storage and go to login
+      localStorage.removeItem('waygo_driver');
+      showScreen('sLogin');
+    }
+  }, 2000);
+});
 
-function playAlertSound() {
+// --- UPDATED SHOWSCREEN LOGIC ---
+function showScreen(id) {
   try {
-    if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-    if (audioCtx.state === 'suspended') audioCtx.resume();
+    document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
+    const el = document.getElementById(id);
+    if (el) {
+      el.classList.add('active');
+    } else {
+      console.warn(`Screen with id "${id}" not found.`);
+    }
+  } catch(e) {
+    console.error('showScreen error:', e);
+  }
+}
 
-    const playBeep = (freq, start, duration, volume) => {
-      const osc = audioCtx.createOscillator();
-      const gain = audioCtx.createGain();
-      osc.connect(gain); gain.connect(audioCtx.destination);
-      osc.frequency.value = freq;
-      gain.gain.setValueAtTime(volume || 0.8, audioCtx.currentTime + start);
+function showToast(msg, color) {
+  const t = document.getElementById('toast');
+  if(!t) return;
+  t.textContent = msg; t.style.background = color || '#fbbf24';
+  t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3000);
+}
+
+function doLogin() {
+  const email = document.getElementById('loginEmail').value.trim().toLowerCase();
+  const pass = document.getElementById('loginPassword').value;
+  const match = DEMO_DRIVERS.find(d => d.email === email && d.password === pass);
+  if (match) {
+    driver = match; localStorage.setItem('waygo_driver', JSON.stringify(driver));
+    enterApp();
+  } else { 
+    const err = document.getElementById('loginErr');
+    err.textContent = 'Fel e-post/lösenord'; 
+    err.style.display='block'; 
+  }
+}
+
+function enterApp() { showScreen('sApp'); showTab(0); connectSocket(); startGPS(); }
+
+function connectSocket() {
+  socket = io(API);
+  socket.on('connect', () => { 
+    socket.emit('driver:join', parseInt(driver.id)); 
+    if(isOnline) socket.emit('driver:status', { driverId: driver.id, status: 'available' });
+  });
+
+  socket.on('booking:assigned:driver', (booking) => {
+    if (!activeBooking) triggerBookingAlert(booking);
+  });
+
+  socket.on('booking:new', (booking) => {
+    if (isOnline && !activeBooking) triggerBookingAlert(booking);
+  });
+
+  socket.on('booking:cancelled', (data) => {
+    if (activeBooking && activeBooking.id === data.id) {
+      activeBooking = null; showToast('Bokning avbokad', '#dc2626'); showTab(0);
+    }
+  });
+}
+
+function triggerBookingAlert(booking) {
+  pendingBooking = booking;
+  document.getElementById('popupRoute').textContent = `${booking.from_address} → ${booking.to_address}`;
+  document.getElementById('popupFare').textContent = `${booking.fare_sek} kr`;
+  document.getElementById('popupPayment').textContent = `Betalning: ${booking.payment_method}`;
+  document.getElementById('bookingOverlay').classList.add('show');
+  let time = 30;
+  clearInterval(popupTimerInterval);
+  popupTimerInterval = setInterval(() => {
+    time--; document.getElementById('popupTimer').textContent = time;
+    if(time <= 0) declineBooking();
+  }, 1000);
+  if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
+}
+
+async function acceptBooking() {
+  clearInterval(popupTimerInterval);
+  try {
+    const res = await fetch(`${API}/bookings/${pendingBooking.id}/assign`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ driver_id: driver.id })
+    });
+    if (res.ok) { 
+      activeBooking = pendingBooking; 
+      pendingBooking = null; 
+      document.getElementById('bookingOverlay').classList.remove('show'); 
+      showTab(0); 
+    }
+  } catch(e) { showToast('Kunde inte acceptera', '#dc2626'); }
+}
+
+function declineBooking() {
+  clearInterval(popupTimerInterval);
+  document.getElementById('bookingOverlay').classList.remove('show');
+  pendingBooking = null;
+}
+
+function toggleOnline() {
+  isOnline = !isOnline;
+  document.getElementById('toggleTrack').classList.toggle('on', isOnline);
+  document.getElementById('toggleLabel').textContent = isOnline ? 'Online' : 'Offline';
+  socket.emit('driver:status', { driverId: driver.id, status: isOnline ? 'available' : 'offline' });
+  showTab(currentTab);
+}
+
+function startGPS() {
+  setInterval(() => {
+    if (isOnline) {
+      currentLat += (Math.random() - 0.5) * 0.0005;
+      currentLng += (Math.random() - 0.5) * 0.0005;
+      socket.emit('driver:location', { driverId: driver.id, lat: currentLat, lng: currentLng });
+    }
+  }, 5000);
+}
+
+function showTab(i) {
+  currentTab = i;
+  const content = document.getElementById('tabContent');
+  if (i === 0) content.innerHTML = renderHome();
+  else if (i === 1) content.innerHTML = `<div class="page"><div class="stitle">Resehistorik</div><p>Inga avslutade resor än.</p></div>`;
+  else if (i === 2) content.innerHTML = `<div class="page"><div class="stitle">Chatt</div><p>Inga aktiva konversationer.</p></div>`;
+  else if (i === 3) content.innerHTML = renderProfile();
+}
+
+function renderHome() {
+  return `
+    <div style="background:#0d1b3e;padding:20px">
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <div><div style="color:#fbbf24;font-weight:bold">${driver.name}</div><div style="color:#4a6090;font-size:12px">${driver.plate}</div></div>
+        <span class="status-pill ${isOnline ? (activeBooking ? 'pill-busy' : 'pill-online') : 'pill-offline'}">${isOnline ? (activeBooking ? 'Upptagen' : 'Ledig') : 'Offline'}</span>
+      </div>
+    </div>
+    <div class="page">
+      ${activeBooking ? `
+        <div class="stitle">Aktiv resa</div>
+        <div class="trip-card trip-active">
+          <div class="trip-ref">${activeBooking.booking_ref}</div>
+          <div class="trip-route">${activeBooking.from_address} → ${activeBooking.to_address}</div>
+          <button class="btn btn-success" style="margin-top:10px" onclick="completeTrip()">✓ Slutför resa</button>
+        </div>
+      ` : `<div style="text-align:center;padding:40px;color:#64748b">${isOnline ? 'Väntar på uppdrag...' : 'Gå online för att ta emot resor'}</div>`}
+      <div class="stitle">Karta</div>
+      <div class="driver-map"><div class="map-bg"></div><div class="my-marker">🚖</div></div>
+    </div>`;
+}
+
+async function completeTrip() {
+  await fetch(`${API}/bookings/${activeBooking.id}/cancel`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status:'completed'})});
+  activeBooking = null; showToast('Resa klar!'); showTab(0);
+}
+
+function renderProfile() {
+  return `<div class="driver-header"><div class="driver-avatar">${driver.name[0]}</div><div style="color:white"><strong>${driver.name}</strong><br>${driver.plate}</div></div>
+  <div class="page"><button class="btn btn-danger" onclick="logout()">Logga ut</button></div>`;
+}
+
+function logout() { localStorage.removeItem('waygo_driver'); location.reload(); }
+function closeMod(id) { document.getElementById(id).classList.remove('open'); }
+</script>
+</body>
+</html>
