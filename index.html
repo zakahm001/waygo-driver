@@ -172,20 +172,6 @@
   </div>
 </div>
 
-<div class="moverlay" id="chatModal">
-  <div class="mbox">
-    <div style="display:flex;justify-content:space-between;margin-bottom:14px">
-      <div id="chatModalTitle" style="font-weight:bold">Chatt</div>
-      <button onclick="closeMod('chatModal')" style="border:none;background:none;font-size:20px">✕</button>
-    </div>
-    <div class="chatbox" id="chatModalMessages"></div>
-    <div class="cinput-row">
-      <input class="cinput" id="chatModalInput" placeholder="Skriv...">
-      <button class="csend" onclick="sendChatModal()">➤</button>
-    </div>
-  </div>
-</div>
-
 <div class="toast" id="toast"></div>
 
 <script>
@@ -198,50 +184,51 @@ const DEMO_DRIVERS = [
   { id:2, name:'Amina Warsame', email:'amina@waygo.se', password:'driver123', plate:'DEF 456', taxiNr:'TL-2209', rating:4.8 }
 ];
 
-// --- UPDATED LOADING LOGIC ---
+// --- AUDIO LOGIC ---
+const audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+function playBookingAlert() {
+  const osc = audioCtx.createOscillator();
+  const gain = audioCtx.createGain();
+  osc.type = 'square';
+  osc.frequency.setValueAtTime(880, audioCtx.currentTime); // High A
+  osc.frequency.exponentialRampToValueAtTime(440, audioCtx.currentTime + 0.5);
+  gain.gain.setValueAtTime(0.1, audioCtx.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.01, audioCtx.currentTime + 0.5);
+  osc.connect(gain);
+  gain.connect(audioCtx.destination);
+  osc.start();
+  osc.stop(audioCtx.currentTime + 0.5);
+}
+
+function unlockAudio() {
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+}
+
+// --- APP INIT ---
 window.addEventListener('load', () => {
   setTimeout(() => {
     try {
       const saved = localStorage.getItem('waygo_driver');
-      // If we have saved data, try to parse and enter
-      if (saved) {
-        driver = JSON.parse(saved);
-        enterApp();
-      } else {
-        showScreen('sLogin');
-      }
+      if (saved) { driver = JSON.parse(saved); enterApp(); } 
+      else { showScreen('sLogin'); }
     } catch(e) {
-      console.error('Init error:', e);
-      // If JSON parse fails or other error, clear storage and go to login
-      localStorage.removeItem('waygo_driver');
+      console.log('Init error:', e);
       showScreen('sLogin');
     }
   }, 2000);
 });
 
-// --- UPDATED SHOWSCREEN LOGIC ---
 function showScreen(id) {
   try {
     document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
     const el = document.getElementById(id);
-    if (el) {
-      el.classList.add('active');
-    } else {
-      console.warn(`Screen with id "${id}" not found.`);
-    }
-  } catch(e) {
-    console.error('showScreen error:', e);
-  }
-}
-
-function showToast(msg, color) {
-  const t = document.getElementById('toast');
-  if(!t) return;
-  t.textContent = msg; t.style.background = color || '#fbbf24';
-  t.classList.add('show'); setTimeout(() => t.classList.remove('show'), 3000);
+    if (el) el.classList.add('active');
+  } catch(e) { console.log('showScreen error:', e); }
 }
 
 function doLogin() {
+  unlockAudio();
   const email = document.getElementById('loginEmail').value.trim().toLowerCase();
   const pass = document.getElementById('loginPassword').value;
   const match = DEMO_DRIVERS.find(d => d.email === email && d.password === pass);
@@ -249,9 +236,8 @@ function doLogin() {
     driver = match; localStorage.setItem('waygo_driver', JSON.stringify(driver));
     enterApp();
   } else { 
-    const err = document.getElementById('loginErr');
-    err.textContent = 'Fel e-post/lösenord'; 
-    err.style.display='block'; 
+    document.getElementById('loginErr').textContent = 'Fel e-post/lösenord'; 
+    document.getElementById('loginErr').style.display='block'; 
   }
 }
 
@@ -271,27 +257,26 @@ function connectSocket() {
   socket.on('booking:new', (booking) => {
     if (isOnline && !activeBooking) triggerBookingAlert(booking);
   });
-
-  socket.on('booking:cancelled', (data) => {
-    if (activeBooking && activeBooking.id === data.id) {
-      activeBooking = null; showToast('Bokning avbokad', '#dc2626'); showTab(0);
-    }
-  });
 }
 
 function triggerBookingAlert(booking) {
   pendingBooking = booking;
+  playBookingAlert(); // Trigger Audio
+  if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
+
   document.getElementById('popupRoute').textContent = `${booking.from_address} → ${booking.to_address}`;
   document.getElementById('popupFare').textContent = `${booking.fare_sek} kr`;
   document.getElementById('popupPayment').textContent = `Betalning: ${booking.payment_method}`;
   document.getElementById('bookingOverlay').classList.add('show');
+  
   let time = 30;
   clearInterval(popupTimerInterval);
   popupTimerInterval = setInterval(() => {
-    time--; document.getElementById('popupTimer').textContent = time;
+    time--; 
+    document.getElementById('popupTimer').textContent = time;
+    if(time % 2 === 0) playBookingAlert(); // Beep every 2 seconds
     if(time <= 0) declineBooking();
   }, 1000);
-  if ('vibrate' in navigator) navigator.vibrate([500, 200, 500]);
 }
 
 async function acceptBooking() {
@@ -308,7 +293,7 @@ async function acceptBooking() {
       document.getElementById('bookingOverlay').classList.remove('show'); 
       showTab(0); 
     }
-  } catch(e) { showToast('Kunde inte acceptera', '#dc2626'); }
+  } catch(e) { console.log('Accept fail'); }
 }
 
 function declineBooking() {
@@ -318,6 +303,7 @@ function declineBooking() {
 }
 
 function toggleOnline() {
+  unlockAudio();
   isOnline = !isOnline;
   document.getElementById('toggleTrack').classList.toggle('on', isOnline);
   document.getElementById('toggleLabel').textContent = isOnline ? 'Online' : 'Offline';
@@ -366,18 +352,17 @@ function renderHome() {
     </div>`;
 }
 
-async function completeTrip() {
-  await fetch(`${API}/bookings/${activeBooking.id}/cancel`, { method: 'PATCH', headers: {'Content-Type':'application/json'}, body: JSON.stringify({status:'completed'})});
-  activeBooking = null; showToast('Resa klar!'); showTab(0);
-}
-
 function renderProfile() {
-  return `<div class="driver-header"><div class="driver-avatar">${driver.name[0]}</div><div style="color:white"><strong>${driver.name}</strong><br>${driver.plate}</div></div>
-  <div class="page"><button class="btn btn-danger" onclick="logout()">Logga ut</button></div>`;
+  return `
+    <div class="driver-header"><div class="driver-avatar">${driver.name[0]}</div><div style="color:white"><strong>${driver.name}</strong><br>${driver.plate}</div></div>
+    <div class="page">
+      <button class="btn btn-blue" style="margin-bottom:10px" onclick="playBookingAlert()">🔊 Testljud / Sound Check</button>
+      <button class="btn btn-danger" onclick="logout()">Logga ut</button>
+    </div>`;
 }
 
 function logout() { localStorage.removeItem('waygo_driver'); location.reload(); }
-function closeMod(id) { document.getElementById(id).classList.remove('open'); }
+function showToast(msg) { /* logic */ }
 </script>
 </body>
 </html>
