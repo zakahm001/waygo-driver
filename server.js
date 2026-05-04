@@ -14,6 +14,39 @@ const io = new Server(server, {
 
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
+// 46elks SMS
+const ELKS_USER = 'u7a7b323b5af0436c7dbfd1140e7c0221';
+const ELKS_PWD = 'C44F26D562BB300E2CAB4AE20BF5DDFD';
+const ELKS_FROM = 'Waygo';
+
+async function sendSMS(to, message) {
+  try {
+    const phone = to.replace(/\D/g, '');
+    const intl = phone.startsWith('0')
+      ? '+46' + phone.slice(1)
+      : '+' + phone;
+    const body = new URLSearchParams({
+      from: ELKS_FROM,
+      to: intl,
+      message: message
+    });
+    const res = await fetch('https://api.46elks.com/a1/sms', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + Buffer.from(
+          ELKS_USER + ':' + ELKS_PWD
+        ).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+    const data = await res.json();
+    console.log('SMS sent:', data.status, 'to', intl);
+    return data;
+  } catch(e) {
+    console.log('SMS error:', e.message);
+  }
+}
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -76,6 +109,15 @@ app.post('/bookings', async (req, res) => {
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
+  
+// SMS to customer
+if (booking.customer_phone) {
+  sendSMS(booking.customer_phone,
+    'Waygo: Din bokning ' + booking.booking_ref +
+    ' är mottagen. Vi hittar en förare åt dig nu. ' +
+    'Från: ' + booking.from_address
+  );
+}
     res.json({ booking });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -95,6 +137,16 @@ app.patch('/bookings/:id/assign', async (req, res) => {
     );
     const booking = r.rows[0];
     io.emit('booking:assigned', booking);
+
+// SMS to customer when driver assigned
+if (booking.customer_phone) {
+  sendSMS(booking.customer_phone,
+    'Waygo: Din förare ' + booking.driver_name +
+    ' är på väg! Bokning ' + booking.booking_ref +
+    '. Registreringsskylt: ' + (booking.driver_plate || '') +
+    '. Har du frågor? Ring oss: +46101234567'
+  );
+}
     io.to('driver-' + driver_id).emit('booking:assigned:driver', booking);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
