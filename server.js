@@ -68,24 +68,14 @@ function authMiddleware(req, res, next) {
   catch (err) { res.status(401).json({ error: 'Invalid token' }); }
 }
 
-app.get('/', (req, res) => {
-  res.json({ message: 'Waygo API running', status: 'ok',
-    version: '5.1', database: 'connected', realtime: 'socket.io active' });
-});
 app.get('/my-bookings', authMiddleware, async (req, res) => {
   try {
-    const customerId = req.customer.id;
     const r = await pool.query(
       `SELECT b.*, d.name as driver_name, d.plate as driver_plate
        FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
-       WHERE b.customer_phone = (
-         SELECT phone FROM customers WHERE id=$1
-       )
-       OR b.customer_name = (
-         SELECT name FROM customers WHERE id=$1
-       )
+       WHERE b.customer_id=$1
        ORDER BY b.created_at DESC`,
-      [customerId]
+      [req.customer.id]
     );
     res.json({ bookings: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -113,16 +103,15 @@ app.get('/drivers', async (req, res) => {
 
 app.post('/bookings', async (req, res) => {
   try {
-    const { customer_name, customer_phone, from_address, to_address,
-      payment_method, fare_sek, scheduled_at, booking_type } = req.body;
     const ref = 'W-' + Date.now().toString().slice(-6);
+    const custId = req.body.customer_id || null;
     const r = await pool.query(
       `INSERT INTO bookings (booking_ref, customer_name, customer_phone,
        from_address, to_address, payment_method, fare_sek,
-       scheduled_at, booking_type)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING *`,
+       scheduled_at, booking_type, customer_id)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [ref, customer_name, customer_phone, from_address, to_address,
-       payment_method, fare_sek, scheduled_at||null, booking_type||'now']
+       payment_method, fare_sek, scheduled_at||null, booking_type||'now', custId]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
