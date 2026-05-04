@@ -72,7 +72,24 @@ app.get('/', (req, res) => {
   res.json({ message: 'Waygo API running', status: 'ok',
     version: '5.1', database: 'connected', realtime: 'socket.io active' });
 });
-
+app.get('/my-bookings', authMiddleware, async (req, res) => {
+  try {
+    const customerId = req.customer.id;
+    const r = await pool.query(
+      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
+       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
+       WHERE b.customer_phone = (
+         SELECT phone FROM customers WHERE id=$1
+       )
+       OR b.customer_name = (
+         SELECT name FROM customers WHERE id=$1
+       )
+       ORDER BY b.created_at DESC`,
+      [customerId]
+    );
+    res.json({ bookings: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
 app.get('/bookings', async (req, res) => {
   try {
     const r = await pool.query(
