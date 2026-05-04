@@ -877,23 +877,64 @@ function declineBooking() {
 async function completeTrip() {
   if (!activeBooking) return;
   const fare = activeBooking.fare_sek || 0;
-  myTrips.unshift({
-    ...activeBooking,
-    status: 'completed',
-    completed_at: new Date()
-  });
-  driver.earnings_today =
-    (driver.earnings_today || 0) + fare;
-  localStorage.setItem(
-    'waygo_driver', JSON.stringify(driver));
+  const bookingId = activeBooking.id;
+
+  showToast('⏳ Slutför resa...', '#0d9488', 'white');
 
   try {
-    await fetch(
-      API + '/bookings/' +
-      activeBooking.id + '/cancel',
-      { method: 'PATCH' }
+    const res = await fetch(
+      API + '/bookings/' + bookingId + '/complete',
+      {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          driver_id: parseInt(driver.id),
+          fare: fare
+        })
+      }
     );
-  } catch(e) {}
+
+    if (res.ok) {
+      // Save to local trip history
+      myTrips.unshift({
+        ...activeBooking,
+        status: 'completed',
+        completed_at: new Date()
+      });
+
+      // Update driver earnings
+      driver.earnings_today =
+        (driver.earnings_today || 0) + fare;
+      driver.trips_today =
+        (driver.trips_today || 0) + 1;
+
+      localStorage.setItem(
+        'waygo_driver', JSON.stringify(driver));
+
+      activeBooking = null;
+
+      if (socket) {
+        socket.emit('driver:status', {
+          driverId: parseInt(driver.id),
+          status: 'available'
+        });
+      }
+
+      showToast(
+        '✅ Resa slutförd! +' + fare + ' kr',
+        '#15803d', 'white');
+      showTab(0);
+    } else {
+      showToast(
+        '⚠️ Kunde inte slutföra',
+        '#dc2626', 'white');
+    }
+  } catch(e) {
+    showToast(
+      '⚠️ Nätverksfel: ' + e.message,
+      '#dc2626', 'white');
+  }
+}
 
   if (socket) {
     socket.emit('driver:status', {
