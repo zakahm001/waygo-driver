@@ -401,5 +401,3 @@ server.listen(PORT, () => {
   console.log('Waygo API v5.1 on port ' + PORT);
   console.log('Socket.io ready');
 });
-ENDOFFILE
-echo "Done. Lines: $(wc -l < /mnt/user-data/outputs/server.js)"
