@@ -14,39 +14,11 @@ const io = new Server(server, {
 
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
+
 // 46elks SMS
 const ELKS_USER = 'u7a7b323b5af0436c7dbfd1140e7c0221';
 const ELKS_PWD = 'C44F26D562BB300E2CAB4AE20BF5DDFD';
 const ELKS_FROM = 'Waygo';
-
-async function sendSMS(to, message) {
-  try {
-    const phone = to.replace(/\D/g, '');
-    const intl = phone.startsWith('0')
-      ? '+46' + phone.slice(1)
-      : '+' + phone;
-    const body = new URLSearchParams({
-      from: ELKS_FROM,
-      to: intl,
-      message: message
-    });
-    const res = await fetch('https://api.46elks.com/a1/sms', {
-      method: 'POST',
-      headers: {
-        'Authorization': 'Basic ' + Buffer.from(
-          ELKS_USER + ':' + ELKS_PWD
-        ).toString('base64'),
-        'Content-Type': 'application/x-www-form-urlencoded'
-      },
-      body: body.toString()
-    });
-    const data = await res.json();
-    console.log('SMS sent:', data.status, 'to', intl);
-    return data;
-  } catch(e) {
-    console.log('SMS error:', e.message);
-  }
-}
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -68,6 +40,40 @@ function authMiddleware(req, res, next) {
   catch (err) { res.status(401).json({ error: 'Invalid token' }); }
 }
 
+async function sendSMS(to, message) {
+  try {
+    const phone = to.replace(/\D/g, '');
+    const intl = phone.startsWith('0') ? '+46' + phone.slice(1) : '+' + phone;
+    const body = new URLSearchParams({ from: ELKS_FROM, to: intl, message });
+    const res = await fetch('https://api.46elks.com/a1/sms', {
+      method: 'POST',
+      headers: {
+        'Authorization': 'Basic ' + Buffer.from(ELKS_USER + ':' + ELKS_PWD).toString('base64'),
+        'Content-Type': 'application/x-www-form-urlencoded'
+      },
+      body: body.toString()
+    });
+    const data = await res.json();
+    console.log('SMS sent:', data.status, 'to', intl);
+  } catch(e) { console.log('SMS error:', e.message); }
+}
+
+app.get('/', (req, res) => {
+  res.json({ message: 'Waygo API running', status: 'ok',
+    version: '5.2', database: 'connected', realtime: 'socket.io active' });
+});
+
+app.get('/bookings', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
+       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
+       ORDER BY b.created_at DESC`
+    );
+    res.json({ bookings: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/my-bookings', authMiddleware, async (req, res) => {
   try {
     const r = await pool.query(
@@ -76,16 +82,6 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
        WHERE b.customer_id=$1
        ORDER BY b.created_at DESC`,
       [req.customer.id]
-    );
-    res.json({ bookings: r.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-app.get('/bookings', async (req, res) => {
-  try {
-    const r = await pool.query(
-      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
-       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
-       ORDER BY b.created_at DESC`
     );
     res.json({ bookings: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -103,27 +99,25 @@ app.get('/drivers', async (req, res) => {
 
 app.post('/bookings', async (req, res) => {
   try {
+    const { customer_name, customer_phone, from_address, to_address,
+      payment_method, fare_sek, scheduled_at, booking_type, customer_id } = req.body;
     const ref = 'W-' + Date.now().toString().slice(-6);
-    const custId = req.body.customer_id || null;
     const r = await pool.query(
       `INSERT INTO bookings (booking_ref, customer_name, customer_phone,
        from_address, to_address, payment_method, fare_sek,
        scheduled_at, booking_type, customer_id)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
       [ref, customer_name, customer_phone, from_address, to_address,
-       payment_method, fare_sek, scheduled_at||null, booking_type||'now', custId]
+       payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
-  
-// SMS to customer
-if (booking.customer_phone) {
-  sendSMS(booking.customer_phone,
-    'Waygo: Din bokning ' + booking.booking_ref +
-    ' är mottagen. Vi hittar en förare åt dig nu. ' +
-    'Från: ' + booking.from_address
-  );
-}
+    if (booking.customer_phone) {
+      sendSMS(booking.customer_phone,
+        'Waygo: Din bokning ' + booking.booking_ref +
+        ' ar mottagen. Vi hittar en forare. Fran: ' + booking.from_address
+      );
+    }
     res.json({ booking });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -143,17 +137,15 @@ app.patch('/bookings/:id/assign', async (req, res) => {
     );
     const booking = r.rows[0];
     io.emit('booking:assigned', booking);
-
-// SMS to customer when driver assigned
-if (booking.customer_phone) {
-  sendSMS(booking.customer_phone,
-    'Waygo: Din förare ' + booking.driver_name +
-    ' är på väg! Bokning ' + booking.booking_ref +
-    '. Registreringsskylt: ' + (booking.driver_plate || '') +
-    '. Har du frågor? Ring oss: +46101234567'
-  );
-}
     io.to('driver-' + driver_id).emit('booking:assigned:driver', booking);
+    if (booking.customer_phone) {
+      sendSMS(booking.customer_phone,
+        'Waygo: Din forare ' + booking.driver_name +
+        ' ar pa vag! Bokning ' + booking.booking_ref +
+        '. Skylt: ' + (booking.driver_plate||'') +
+        '. Fragor? Ring: +46101234567'
+      );
+    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -188,12 +180,9 @@ app.patch('/bookings/:id/cancel', async (req, res) => {
     if (b.rows[0]?.driver_id) {
       await pool.query('UPDATE drivers SET status=$1 WHERE id=$2',
         ['available', b.rows[0].driver_id]);
-      io.to('driver-' + b.rows[0].driver_id)
-        .emit('booking:cancelled', { id: parseInt(id) });
+      io.to('driver-' + b.rows[0].driver_id).emit('booking:cancelled', { id: parseInt(id) });
     }
-    await pool.query(
-      `UPDATE bookings SET status='cancelled', driver_id=NULL WHERE id=$1`, [id]
-    );
+    await pool.query(`UPDATE bookings SET status='cancelled', driver_id=NULL WHERE id=$1`, [id]);
     io.emit('booking:cancelled', { id: parseInt(id) });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -206,8 +195,7 @@ app.patch('/bookings/:id/cancel-request', async (req, res) => {
     await pool.query(
       `UPDATE bookings SET cancel_request=true, contacted_support=true WHERE id=$1`, [id]
     );
-    io.to('central').emit('booking:cancelRequest',
-      { bookingId: id, customerName: customer_name });
+    io.to('central').emit('booking:cancelRequest', { bookingId: id, customerName: customer_name });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -223,14 +211,11 @@ app.patch('/bookings/:id/approve-cancel', async (req, res) => {
           ['available', b.rows[0].driver_id]);
       }
       await pool.query(
-        `UPDATE bookings SET status='cancelled', cancel_request=false,
-         driver_id=NULL WHERE id=$1`, [id]
+        `UPDATE bookings SET status='cancelled', cancel_request=false, driver_id=NULL WHERE id=$1`, [id]
       );
       io.emit('booking:cancelled', { id: parseInt(id) });
     } else {
-      await pool.query(
-        'UPDATE bookings SET cancel_request=false WHERE id=$1', [id]
-      );
+      await pool.query('UPDATE bookings SET cancel_request=false WHERE id=$1', [id]);
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -240,10 +225,31 @@ app.patch('/payments/:id/update', async (req, res) => {
   try {
     const { id } = req.params;
     const { payment_status } = req.body;
-    await pool.query(
-      'UPDATE bookings SET payment_status=$1 WHERE id=$2', [payment_status, id]
-    );
+    await pool.query('UPDATE bookings SET payment_status=$1 WHERE id=$2', [payment_status, id]);
     res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/drivers/add', async (req, res) => {
+  try {
+    const { name, email, phone, plate, taxi_nr, city, password } = req.body;
+    if (!name || !email || !phone || !plate || !password)
+      return res.status(400).json({ error: 'Obligatoriska falt saknas' });
+    const existing = await pool.query(
+      'SELECT id FROM drivers WHERE email=$1 OR plate=$2', [email, plate]
+    );
+    if (existing.rows.length > 0)
+      return res.status(400).json({ error: 'E-post eller registreringsskylt används redan' });
+    const hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      `INSERT INTO drivers (name, email, phone, plate, taxi_nr, city,
+       password_hash, status, rating, trips_today, earnings_today)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,'offline',5.0,0,0) RETURNING *`,
+      [name, email, phone, plate, taxi_nr||null, city||null, hash]
+    );
+    const driver = r.rows[0];
+    delete driver.password_hash;
+    res.json({ driver });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -252,9 +258,7 @@ app.post('/drivers/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ error: 'E-post och lösenord krävs' });
-    const r = await pool.query(
-      'SELECT * FROM drivers WHERE email=$1', [email]
-    );
+    const r = await pool.query('SELECT * FROM drivers WHERE email=$1', [email]);
     if (r.rows.length === 0)
       return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const driver = r.rows[0];
@@ -279,9 +283,7 @@ app.post('/customers/register', async (req, res) => {
       home_address, work_address } = req.body;
     if (!name || !phone || !email || !password)
       return res.status(400).json({ error: 'Namn, telefon, e-post och lösenord krävs' });
-    const existing = await pool.query(
-      'SELECT id FROM customers WHERE email=$1', [email]
-    );
+    const existing = await pool.query('SELECT id FROM customers WHERE email=$1', [email]);
     if (existing.rows.length > 0)
       return res.status(400).json({ error: 'E-postadressen används redan' });
     const hash = await bcrypt.hash(password, 10);
@@ -311,9 +313,7 @@ app.post('/customers/login', async (req, res) => {
     const { email, password } = req.body;
     if (!email || !password)
       return res.status(400).json({ error: 'E-post och lösenord krävs' });
-    const r = await pool.query(
-      'SELECT * FROM customers WHERE email=$1', [email]
-    );
+    const r = await pool.query('SELECT * FROM customers WHERE email=$1', [email]);
     if (r.rows.length === 0)
       return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const customer = r.rows[0];
@@ -337,8 +337,7 @@ app.get('/customers/profile', authMiddleware, async (req, res) => {
        other_address, profile_initial, created_at
        FROM customers WHERE id=$1`, [req.customer.id]
     );
-    if (r.rows.length === 0)
-      return res.status(404).json({ error: 'Kund hittades inte' });
+    if (r.rows.length === 0) return res.status(404).json({ error: 'Kund hittades inte' });
     res.json({ customer: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -376,9 +375,7 @@ app.post('/bookings/:id/rate', authMiddleware, async (req, res) => {
     const { id } = req.params;
     const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
     if (b.rows[0]?.driver_id) {
-      const d = await pool.query(
-        'SELECT rating FROM drivers WHERE id=$1', [b.rows[0].driver_id]
-      );
+      const d = await pool.query('SELECT rating FROM drivers WHERE id=$1', [b.rows[0].driver_id]);
       const newRating = ((d.rows[0].rating * 10) + rating) / 11;
       await pool.query('UPDATE drivers SET rating=$1 WHERE id=$2',
         [newRating.toFixed(2), b.rows[0].driver_id]);
@@ -434,9 +431,7 @@ io.on('connection', (socket) => {
     const { driverId, lat, lng } = data;
     driverPositions[driverId] = { lat, lng, updatedAt: new Date() };
     try {
-      await pool.query(
-        'UPDATE drivers SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, driverId]
-      );
+      await pool.query('UPDATE drivers SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, driverId]);
     } catch (err) { console.log('GPS error: ' + err.message); }
     io.to('central').emit('driver:location', { driverId, lat, lng });
     io.emit('driver:location:' + driverId, { driverId, lat, lng });
@@ -444,9 +439,7 @@ io.on('connection', (socket) => {
   socket.on('driver:status', async (data) => {
     const { driverId, status } = data;
     try {
-      await pool.query(
-        'UPDATE drivers SET status=$1 WHERE id=$2', [status, driverId]
-      );
+      await pool.query('UPDATE drivers SET status=$1 WHERE id=$2', [status, driverId]);
       io.emit('driver:status', { driverId, status });
     } catch (err) { console.log('Status error: ' + err.message); }
   });
@@ -456,6 +449,6 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log('Waygo API v5.1 on port ' + PORT);
+  console.log('Waygo API v5.2 on port ' + PORT);
   console.log('Socket.io ready');
 });
