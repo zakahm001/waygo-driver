@@ -9,11 +9,12 @@ const jwt = require('jsonwebtoken');
 const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
-  cors: { origin: '*', methods: ['GET','POST','PATCH'] }
+  cors: { origin: '*', methods: ['GET','POST','PATCH','DELETE'] }
 });
 
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
+const STAFF_SECRET = 'waygo-staff-2025';
 
 // 46elks SMS
 const ELKS_USER = 'u7a7b323b5af0436c7dbfd1140e7c0221';
@@ -40,6 +41,24 @@ function authMiddleware(req, res, next) {
   catch (err) { res.status(401).json({ error: 'Invalid token' }); }
 }
 
+function staffMiddleware(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try { req.staff = jwt.verify(token, STAFF_SECRET); next(); }
+  catch (err) { res.status(401).json({ error: 'Invalid staff token' }); }
+}
+
+function adminMiddleware(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    req.staff = jwt.verify(token, STAFF_SECRET);
+    if (req.staff.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    next();
+  }
+  catch (err) { res.status(401).json({ error: 'Invalid staff token' }); }
+}
+
 async function sendSMS(to, message) {
   try {
     const phone = to.replace(/\D/g, '');
@@ -58,11 +77,109 @@ async function sendSMS(to, message) {
   } catch(e) { console.log('SMS error:', e.message); }
 }
 
+// ── HEALTH CHECK ──
 app.get('/', (req, res) => {
   res.json({ message: 'Waygo API running', status: 'ok',
-    version: '5.2', database: 'connected', realtime: 'socket.io active' });
+    version: '5.3', database: 'connected', realtime: 'socket.io active' });
 });
 
+// ── STAFF AUTH ──
+app.post('/staff/login', async (req, res) => {
+  try {
+    const { email, password } = req.body;
+    if (!email || !password)
+      return res.status(400).json({ error: 'E-post och lösenord krävs' });
+    const r = await pool.query('SELECT * FROM staff WHERE email=$1', [email]);
+    if (r.rows.length === 0)
+      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    const staff = r.rows[0];
+    const valid = await bcrypt.compare(password, staff.password_hash);
+    if (!valid)
+      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    const token = jwt.sign(
+      { id: staff.id, email: staff.email, name: staff.name, role: staff.role },
+      STAFF_SECRET, { expiresIn: '30d' }
+    );
+    delete staff.password_hash;
+    res.json({ staff, token });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/staff', adminMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, email, role, created_at FROM staff ORDER BY created_at ASC'
+    );
+    res.json({ staff: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/staff/add', adminMiddleware, async (req, res) => {
+  try {
+    const { name, email, password, role } = req.body;
+    if (!name || !email || !password)
+      return res.status(400).json({ error: 'Namn, e-post och lösenord krävs' });
+    const existing = await pool.query('SELECT id FROM staff WHERE email=$1', [email]);
+    if (existing.rows.length > 0)
+      return res.status(400).json({ error: 'E-postadressen används redan' });
+    const hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      `INSERT INTO staff (name, email, password_hash, role)
+       VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at`,
+      [name, email, hash, role || 'dispatcher']
+    );
+    res.json({ staff: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/staff/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { name, email, password, role } = req.body;
+    if (password) {
+      const hash = await bcrypt.hash(password, 10);
+      await pool.query(
+        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), password_hash=$3, role=COALESCE($4,role) WHERE id=$5',
+        [name, email, hash, role, id]
+      );
+    } else {
+      await pool.query(
+        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), role=COALESCE($3,role) WHERE id=$4',
+        [name, email, role, id]
+      );
+    }
+    const r = await pool.query(
+      'SELECT id, name, email, role, created_at FROM staff WHERE id=$1', [id]
+    );
+    res.json({ staff: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/staff/change-password', staffMiddleware, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password)
+      return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
+    const r = await pool.query('SELECT * FROM staff WHERE id=$1', [req.staff.id]);
+    const valid = await bcrypt.compare(current_password, r.rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: 'Fel nuvarande lösenord' });
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE staff SET password_hash=$1 WHERE id=$2', [hash, req.staff.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/staff/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (parseInt(id) === req.staff.id)
+      return res.status(400).json({ error: 'Du kan inte ta bort ditt eget konto' });
+    await pool.query('DELETE FROM staff WHERE id=$1', [id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── BOOKINGS ──
 app.get('/bookings', async (req, res) => {
   try {
     const r = await pool.query(
@@ -84,16 +201,6 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
       [req.customer.id]
     );
     res.json({ bookings: r.rows });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.get('/drivers', async (req, res) => {
-  try {
-    const r = await pool.query('SELECT * FROM drivers ORDER BY name');
-    const drivers = r.rows.map(d => ({
-      ...d, live_position: driverPositions[d.id] || null
-    }));
-    res.json({ drivers });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -221,12 +328,14 @@ app.patch('/bookings/:id/approve-cancel', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.patch('/payments/:id/update', async (req, res) => {
+// ── DRIVERS ──
+app.get('/drivers', async (req, res) => {
   try {
-    const { id } = req.params;
-    const { payment_status } = req.body;
-    await pool.query('UPDATE bookings SET payment_status=$1 WHERE id=$2', [payment_status, id]);
-    res.json({ success: true });
+    const r = await pool.query('SELECT * FROM drivers ORDER BY name');
+    const drivers = r.rows.map(d => ({
+      ...d, live_position: driverPositions[d.id] || null
+    }));
+    res.json({ drivers });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -276,6 +385,7 @@ app.post('/drivers/login', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── CUSTOMERS ──
 app.post('/customers/register', async (req, res) => {
   try {
     const { name, phone, email, password, customer_type,
@@ -384,6 +494,7 @@ app.post('/bookings/:id/rate', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// ── MESSAGES ──
 app.get('/messages/:threadKey', async (req, res) => {
   try {
     const r = await pool.query(
@@ -414,6 +525,7 @@ app.post('/test-gps', (req, res) => {
   res.json({ status: 'ok' });
 });
 
+// ── SOCKET ──
 io.on('connection', (socket) => {
   console.log('Connected: ' + socket.id);
   socket.on('central:join', () => {
@@ -449,6 +561,6 @@ io.on('connection', (socket) => {
 });
 
 server.listen(PORT, () => {
-  console.log('Waygo API v5.2 on port ' + PORT);
+  console.log('Waygo API v5.3 on port ' + PORT);
   console.log('Socket.io ready');
 });
