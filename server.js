@@ -15,8 +15,6 @@ const io = new Server(server, {
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
 const STAFF_SECRET = 'waygo-staff-2025';
-
-// 46elks SMS
 const ELKS_USER = 'u7a7b323b5af0436c7dbfd1140e7c0221';
 const ELKS_PWD = 'C44F26D562BB300E2CAB4AE20BF5DDFD';
 const ELKS_FROM = 'Waygo';
@@ -25,15 +23,13 @@ app.use(cors({ origin: '*' }));
 app.use(express.json());
 
 const pool = new Pool({
-  user: 'waygo_user',
-  host: 'localhost',
-  database: 'waygo',
-  password: 'Waygo2025!',
-  port: 5432,
+  user: 'waygo_user', host: 'localhost',
+  database: 'waygo', password: 'Waygo2025!', port: 5432,
 });
 
 const driverPositions = {};
 
+// ── MIDDLEWARE ──
 function authMiddleware(req, res, next) {
   const token = req.headers.authorization?.replace('Bearer ', '');
   if (!token) return res.status(401).json({ error: 'No token' });
@@ -53,10 +49,19 @@ function adminMiddleware(req, res, next) {
   if (!token) return res.status(401).json({ error: 'No token' });
   try {
     req.staff = jwt.verify(token, STAFF_SECRET);
-    if (req.staff.role !== 'admin') return res.status(403).json({ error: 'Admin only' });
+    if (req.staff.level > 2) return res.status(403).json({ error: 'Admin only' });
     next();
-  }
-  catch (err) { res.status(401).json({ error: 'Invalid staff token' }); }
+  } catch (err) { res.status(401).json({ error: 'Invalid staff token' }); }
+}
+
+function superAdminMiddleware(req, res, next) {
+  const token = req.headers.authorization?.replace('Bearer ', '');
+  if (!token) return res.status(401).json({ error: 'No token' });
+  try {
+    req.staff = jwt.verify(token, STAFF_SECRET);
+    if (req.staff.level !== 1) return res.status(403).json({ error: 'Super Admin only' });
+    next();
+  } catch (err) { res.status(401).json({ error: 'Invalid staff token' }); }
 }
 
 async function sendSMS(to, message) {
@@ -77,27 +82,24 @@ async function sendSMS(to, message) {
   } catch(e) { console.log('SMS error:', e.message); }
 }
 
-// ── HEALTH CHECK ──
+// ── HEALTH ──
 app.get('/', (req, res) => {
   res.json({ message: 'Waygo API running', status: 'ok',
-    version: '5.3', database: 'connected', realtime: 'socket.io active' });
+    version: '5.4', database: 'connected', realtime: 'socket.io active' });
 });
 
 // ── STAFF AUTH ──
 app.post('/staff/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ error: 'E-post och lösenord krävs' });
+    if (!email || !password) return res.status(400).json({ error: 'E-post och lösenord krävs' });
     const r = await pool.query('SELECT * FROM staff WHERE email=$1', [email]);
-    if (r.rows.length === 0)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    if (!r.rows.length) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const staff = r.rows[0];
     const valid = await bcrypt.compare(password, staff.password_hash);
-    if (!valid)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    if (!valid) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const token = jwt.sign(
-      { id: staff.id, email: staff.email, name: staff.name, role: staff.role },
+      { id: staff.id, email: staff.email, name: staff.name, role: staff.role, level: staff.level || 3 },
       STAFF_SECRET, { expiresIn: '30d' }
     );
     delete staff.password_hash;
@@ -107,9 +109,7 @@ app.post('/staff/login', async (req, res) => {
 
 app.get('/staff', adminMiddleware, async (req, res) => {
   try {
-    const r = await pool.query(
-      'SELECT id, name, email, role, created_at FROM staff ORDER BY created_at ASC'
-    );
+    const r = await pool.query('SELECT id, name, email, role, level, created_at FROM staff ORDER BY level ASC, created_at ASC');
     res.json({ staff: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -117,16 +117,18 @@ app.get('/staff', adminMiddleware, async (req, res) => {
 app.post('/staff/add', adminMiddleware, async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
-    if (!name || !email || !password)
-      return res.status(400).json({ error: 'Namn, e-post och lösenord krävs' });
+    if (!name || !email || !password) return res.status(400).json({ error: 'Namn, e-post och lösenord krävs' });
+    // Level rules: superadmin can add admins and dispatchers, admin can only add dispatchers
+    const requestedRole = role || 'dispatcher';
+    if (requestedRole === 'superadmin') return res.status(403).json({ error: 'Kan inte skapa superadmin' });
+    if (requestedRole === 'admin' && req.staff.level > 1) return res.status(403).json({ error: 'Endast superadmin kan lägga till admins' });
+    const level = requestedRole === 'admin' ? 2 : 3;
     const existing = await pool.query('SELECT id FROM staff WHERE email=$1', [email]);
-    if (existing.rows.length > 0)
-      return res.status(400).json({ error: 'E-postadressen används redan' });
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'E-postadressen används redan' });
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      `INSERT INTO staff (name, email, password_hash, role)
-       VALUES ($1,$2,$3,$4) RETURNING id, name, email, role, created_at`,
-      [name, email, hash, role || 'dispatcher']
+      'INSERT INTO staff (name, email, password_hash, role, level) VALUES ($1,$2,$3,$4,$5) RETURNING id, name, email, role, level, created_at',
+      [name, email, hash, requestedRole, level]
     );
     res.json({ staff: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -136,21 +138,25 @@ app.patch('/staff/:id', adminMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
     const { name, email, password, role } = req.body;
+    const target = await pool.query('SELECT * FROM staff WHERE id=$1', [id]);
+    if (!target.rows.length) return res.status(404).json({ error: 'Hittades inte' });
+    const t = target.rows[0];
+    if (t.level === 1 && req.staff.level !== 1) return res.status(403).json({ error: 'Kan inte redigera superadmin' });
+    if (role === 'admin' && req.staff.level > 1) return res.status(403).json({ error: 'Endast superadmin kan sätta admin-roll' });
+    const newLevel = role === 'superadmin' ? 1 : role === 'admin' ? 2 : 3;
     if (password) {
       const hash = await bcrypt.hash(password, 10);
       await pool.query(
-        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), password_hash=$3, role=COALESCE($4,role) WHERE id=$5',
-        [name, email, hash, role, id]
+        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), password_hash=$3, role=COALESCE($4,role), level=$5 WHERE id=$6',
+        [name, email, hash, role, newLevel, id]
       );
     } else {
       await pool.query(
-        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), role=COALESCE($3,role) WHERE id=$4',
-        [name, email, role, id]
+        'UPDATE staff SET name=COALESCE($1,name), email=COALESCE($2,email), role=COALESCE($3,role), level=$4 WHERE id=$5',
+        [name, email, role, newLevel, id]
       );
     }
-    const r = await pool.query(
-      'SELECT id, name, email, role, created_at FROM staff WHERE id=$1', [id]
-    );
+    const r = await pool.query('SELECT id, name, email, role, level, created_at FROM staff WHERE id=$1', [id]);
     res.json({ staff: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -158,8 +164,7 @@ app.patch('/staff/:id', adminMiddleware, async (req, res) => {
 app.patch('/staff/change-password', staffMiddleware, async (req, res) => {
   try {
     const { current_password, new_password } = req.body;
-    if (!current_password || !new_password)
-      return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
+    if (!current_password || !new_password) return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
     const r = await pool.query('SELECT * FROM staff WHERE id=$1', [req.staff.id]);
     const valid = await bcrypt.compare(current_password, r.rows[0].password_hash);
     if (!valid) return res.status(401).json({ error: 'Fel nuvarande lösenord' });
@@ -172,8 +177,11 @@ app.patch('/staff/change-password', staffMiddleware, async (req, res) => {
 app.delete('/staff/:id', adminMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    if (parseInt(id) === req.staff.id)
-      return res.status(400).json({ error: 'Du kan inte ta bort ditt eget konto' });
+    if (parseInt(id) === req.staff.id) return res.status(400).json({ error: 'Du kan inte ta bort ditt eget konto' });
+    const target = await pool.query('SELECT level FROM staff WHERE id=$1', [id]);
+    if (!target.rows.length) return res.status(404).json({ error: 'Hittades inte' });
+    if (target.rows[0].level === 1) return res.status(403).json({ error: 'Kan inte ta bort superadmin' });
+    if (target.rows[0].level === 2 && req.staff.level > 1) return res.status(403).json({ error: 'Endast superadmin kan ta bort admins' });
     await pool.query('DELETE FROM staff WHERE id=$1', [id]);
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -183,9 +191,7 @@ app.delete('/staff/:id', adminMiddleware, async (req, res) => {
 app.get('/bookings', async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
-       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
-       ORDER BY b.created_at DESC`
+      'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id ORDER BY b.created_at DESC'
     );
     res.json({ bookings: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -194,10 +200,7 @@ app.get('/bookings', async (req, res) => {
 app.get('/my-bookings', authMiddleware, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
-       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id
-       WHERE b.customer_id=$1
-       ORDER BY b.created_at DESC`,
+      'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.customer_id=$1 ORDER BY b.created_at DESC',
       [req.customer.id]
     );
     res.json({ bookings: r.rows });
@@ -210,20 +213,13 @@ app.post('/bookings', async (req, res) => {
       payment_method, fare_sek, scheduled_at, booking_type, customer_id } = req.body;
     const ref = 'W-' + Date.now().toString().slice(-6);
     const r = await pool.query(
-      `INSERT INTO bookings (booking_ref, customer_name, customer_phone,
-       from_address, to_address, payment_method, fare_sek,
-       scheduled_at, booking_type, customer_id)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *`,
-      [ref, customer_name, customer_phone, from_address, to_address,
-       payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null]
+      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
+      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
     if (booking.customer_phone) {
-      sendSMS(booking.customer_phone,
-        'Waygo: Din bokning ' + booking.booking_ref +
-        ' ar mottagen. Vi hittar en forare. Fran: ' + booking.from_address
-      );
+      sendSMS(booking.customer_phone, 'Waygo: Din bokning ' + booking.booking_ref + ' ar mottagen. Fran: ' + booking.from_address);
     }
     res.json({ booking });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -233,25 +229,16 @@ app.patch('/bookings/:id/assign', async (req, res) => {
   try {
     const { driver_id } = req.body;
     const { id } = req.params;
-    await pool.query(
-      `UPDATE bookings SET driver_id=$1, status='assigned', assigned_at=NOW() WHERE id=$2`,
-      [driver_id, id]
-    );
-    await pool.query('UPDATE drivers SET status=$1 WHERE id=$2', ['busy', driver_id]);
+    await pool.query('UPDATE bookings SET driver_id=$1, status=\'assigned\', assigned_at=NOW() WHERE id=$2', [driver_id, id]);
+    await pool.query('UPDATE drivers SET status=$1, last_active=NOW() WHERE id=$2', ['busy', driver_id]);
     const r = await pool.query(
-      `SELECT b.*, d.name as driver_name, d.plate as driver_plate
-       FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1`, [id]
+      'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
     );
     const booking = r.rows[0];
     io.emit('booking:assigned', booking);
     io.to('driver-' + driver_id).emit('booking:assigned:driver', booking);
     if (booking.customer_phone) {
-      sendSMS(booking.customer_phone,
-        'Waygo: Din forare ' + booking.driver_name +
-        ' ar pa vag! Bokning ' + booking.booking_ref +
-        '. Skylt: ' + (booking.driver_plate||'') +
-        '. Fragor? Ring: +46101234567'
-      );
+      sendSMS(booking.customer_phone, 'Waygo: Din forare ' + booking.driver_name + ' ar pa vag! Bokning ' + booking.booking_ref + '. Skylt: ' + (booking.driver_plate||''));
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -261,19 +248,15 @@ app.patch('/bookings/:id/complete', async (req, res) => {
   try {
     const { id } = req.params;
     const { driver_id, fare } = req.body;
-    await pool.query(
-      `UPDATE bookings SET status='completed', payment_status='pending' WHERE id=$1`, [id]
-    );
+    await pool.query('UPDATE bookings SET status=\'completed\', payment_status=\'pending\' WHERE id=$1', [id]);
     if (driver_id) {
       await pool.query(
-        `UPDATE drivers SET status='available', trips_today=trips_today+1,
-         earnings_today=earnings_today+$1 WHERE id=$2`,
+        'UPDATE drivers SET status=\'available\', trips_today=trips_today+1, earnings_today=earnings_today+$1, last_active=NOW() WHERE id=$2',
         [fare || 0, driver_id]
       );
     }
     const r = await pool.query(
-      `SELECT b.*, d.name as driver_name FROM bookings b
-       LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1`, [id]
+      'SELECT b.*, d.name as driver_name FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
     );
     io.emit('booking:completed', r.rows[0]);
     res.json({ success: true });
@@ -285,11 +268,10 @@ app.patch('/bookings/:id/cancel', async (req, res) => {
     const { id } = req.params;
     const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
     if (b.rows[0]?.driver_id) {
-      await pool.query('UPDATE drivers SET status=$1 WHERE id=$2',
-        ['available', b.rows[0].driver_id]);
+      await pool.query('UPDATE drivers SET status=$1 WHERE id=$2', ['available', b.rows[0].driver_id]);
       io.to('driver-' + b.rows[0].driver_id).emit('booking:cancelled', { id: parseInt(id) });
     }
-    await pool.query(`UPDATE bookings SET status='cancelled', driver_id=NULL WHERE id=$1`, [id]);
+    await pool.query('UPDATE bookings SET status=\'cancelled\', driver_id=NULL WHERE id=$1', [id]);
     io.emit('booking:cancelled', { id: parseInt(id) });
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -299,31 +281,8 @@ app.patch('/bookings/:id/cancel-request', async (req, res) => {
   try {
     const { id } = req.params;
     const { customer_name } = req.body;
-    await pool.query(
-      `UPDATE bookings SET cancel_request=true, contacted_support=true WHERE id=$1`, [id]
-    );
+    await pool.query('UPDATE bookings SET cancel_request=true, contacted_support=true WHERE id=$1', [id]);
     io.to('central').emit('booking:cancelRequest', { bookingId: id, customerName: customer_name });
-    res.json({ success: true });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/bookings/:id/approve-cancel', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { approve } = req.body;
-    if (approve) {
-      const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
-      if (b.rows[0]?.driver_id) {
-        await pool.query('UPDATE drivers SET status=$1 WHERE id=$2',
-          ['available', b.rows[0].driver_id]);
-      }
-      await pool.query(
-        `UPDATE bookings SET status='cancelled', cancel_request=false, driver_id=NULL WHERE id=$1`, [id]
-      );
-      io.emit('booking:cancelled', { id: parseInt(id) });
-    } else {
-      await pool.query('UPDATE bookings SET cancel_request=false WHERE id=$1', [id]);
-    }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -332,50 +291,93 @@ app.patch('/bookings/:id/approve-cancel', async (req, res) => {
 app.get('/drivers', async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM drivers ORDER BY name');
-    const drivers = r.rows.map(d => ({
-      ...d, live_position: driverPositions[d.id] || null
-    }));
-    res.json({ drivers });
+    res.json({ drivers: r.rows.map(d => ({ ...d, live_position: driverPositions[d.id] || null })) });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-app.post('/drivers/add', async (req, res) => {
+app.get('/drivers/:id', staffMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM drivers WHERE id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Förare hittades inte' });
+    const d = r.rows[0];
+    delete d.password_hash;
+    const bookings = await pool.query(
+      'SELECT * FROM bookings WHERE driver_id=$1 ORDER BY created_at DESC LIMIT 20', [req.params.id]
+    );
+    res.json({ driver: d, recent_bookings: bookings.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, reason, suspend_until, is_owner, owner_share, name, phone, plate, taxi_nr, city, password } = req.body;
+    if (action === 'block') {
+      await pool.query('UPDATE drivers SET blocked=true WHERE id=$1', [id]);
+    } else if (action === 'unblock') {
+      await pool.query('UPDATE drivers SET blocked=false, suspended_until=NULL, suspend_reason=NULL WHERE id=$1', [id]);
+    } else if (action === 'suspend') {
+      await pool.query(
+        'UPDATE drivers SET suspended_until=$1, suspend_reason=$2 WHERE id=$3',
+        [suspend_until || null, reason || null, id]
+      );
+    } else if (action === 'set_owner') {
+      await pool.query('UPDATE drivers SET is_owner=$1, owner_share=$2 WHERE id=$3', [true, owner_share || 0, id]);
+    } else if (action === 'remove_owner') {
+      await pool.query('UPDATE drivers SET is_owner=false, owner_share=0 WHERE id=$1', [id]);
+    } else if (action === 'update') {
+      if (password) {
+        const hash = await bcrypt.hash(password, 10);
+        await pool.query(
+          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city), password_hash=$6 WHERE id=$7',
+          [name, phone, plate, taxi_nr, city, hash, id]
+        );
+      } else {
+        await pool.query(
+          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city) WHERE id=$6',
+          [name, phone, plate, taxi_nr, city, id]
+        );
+      }
+    }
+    const r = await pool.query('SELECT * FROM drivers WHERE id=$1', [id]);
+    const d = r.rows[0];
+    delete d.password_hash;
+    res.json({ driver: d });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/drivers/add', adminMiddleware, async (req, res) => {
   try {
     const { name, email, phone, plate, taxi_nr, city, password } = req.body;
-    if (!name || !email || !phone || !plate || !password)
-      return res.status(400).json({ error: 'Obligatoriska falt saknas' });
-    const existing = await pool.query(
-      'SELECT id FROM drivers WHERE email=$1 OR plate=$2', [email, plate]
-    );
-    if (existing.rows.length > 0)
-      return res.status(400).json({ error: 'E-post eller registreringsskylt används redan' });
+    if (!name || !email || !phone || !plate || !password) return res.status(400).json({ error: 'Obligatoriska fält saknas' });
+    const existing = await pool.query('SELECT id FROM drivers WHERE email=$1 OR plate=$2', [email, plate]);
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'E-post eller skylt används redan' });
     const hash = await bcrypt.hash(password, 10);
     const r = await pool.query(
-      `INSERT INTO drivers (name, email, phone, plate, taxi_nr, city,
-       password_hash, status, rating, trips_today, earnings_today)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,'offline',5.0,0,0) RETURNING *`,
+      'INSERT INTO drivers (name, email, phone, plate, taxi_nr, city, password_hash, status, rating, trips_today, earnings_today) VALUES ($1,$2,$3,$4,$5,$6,$7,\'offline\',5.0,0,0) RETURNING *',
       [name, email, phone, plate, taxi_nr||null, city||null, hash]
     );
-    const driver = r.rows[0];
-    delete driver.password_hash;
-    res.json({ driver });
+    const d = r.rows[0];
+    delete d.password_hash;
+    res.json({ driver: d });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.post('/drivers/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ error: 'E-post och lösenord krävs' });
+    if (!email || !password) return res.status(400).json({ error: 'E-post och lösenord krävs' });
     const r = await pool.query('SELECT * FROM drivers WHERE email=$1', [email]);
-    if (r.rows.length === 0)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    if (!r.rows.length) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const driver = r.rows[0];
-    if (!driver.password_hash)
-      return res.status(401).json({ error: 'Inget lösenord satt' });
+    if (driver.blocked) return res.status(403).json({ error: 'Ditt konto är blockerat. Kontakta central.' });
+    if (driver.suspended_until && new Date(driver.suspended_until) > new Date()) {
+      return res.status(403).json({ error: 'Ditt konto är avstängt till ' + new Date(driver.suspended_until).toLocaleDateString('sv-SE') + '. Anledning: ' + (driver.suspend_reason || '') });
+    }
+    if (!driver.password_hash) return res.status(401).json({ error: 'Inget lösenord satt' });
     const valid = await bcrypt.compare(password, driver.password_hash);
-    if (!valid)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    if (!valid) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    await pool.query('UPDATE drivers SET last_active=NOW() WHERE id=$1', [driver.id]);
     const token = jwt.sign(
       { id: driver.id, email: driver.email, name: driver.name },
       JWT_SECRET, { expiresIn: '30d' }
@@ -386,34 +388,49 @@ app.post('/drivers/login', async (req, res) => {
 });
 
 // ── CUSTOMERS ──
+app.get('/customers', adminMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, name, email, phone, customer_type, preferred_payment, blocked, block_reason, created_at FROM customers ORDER BY created_at DESC'
+    );
+    res.json({ customers: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/customers/:id/manage', adminMiddleware, async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { action, reason } = req.body;
+    if (action === 'block') {
+      await pool.query('UPDATE customers SET blocked=true, block_reason=$1 WHERE id=$2', [reason||null, id]);
+    } else if (action === 'unblock') {
+      await pool.query('UPDATE customers SET blocked=false, block_reason=NULL WHERE id=$1', [id]);
+    } else if (action === 'reset_password') {
+      const { new_password } = req.body;
+      if (!new_password) return res.status(400).json({ error: 'Nytt lösenord krävs' });
+      const hash = await bcrypt.hash(new_password, 10);
+      await pool.query('UPDATE customers SET password_hash=$1 WHERE id=$2', [hash, id]);
+    }
+    const r = await pool.query(
+      'SELECT id, name, email, phone, customer_type, blocked, block_reason FROM customers WHERE id=$1', [id]
+    );
+    res.json({ customer: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/customers/register', async (req, res) => {
   try {
-    const { name, phone, email, password, customer_type,
-      org_number, billing_address, preferred_payment,
-      home_address, work_address } = req.body;
-    if (!name || !phone || !email || !password)
-      return res.status(400).json({ error: 'Namn, telefon, e-post och lösenord krävs' });
+    const { name, phone, email, password, customer_type, org_number, billing_address, preferred_payment, home_address, work_address } = req.body;
+    if (!name || !phone || !email || !password) return res.status(400).json({ error: 'Namn, telefon, e-post och lösenord krävs' });
     const existing = await pool.query('SELECT id FROM customers WHERE email=$1', [email]);
-    if (existing.rows.length > 0)
-      return res.status(400).json({ error: 'E-postadressen används redan' });
+    if (existing.rows.length > 0) return res.status(400).json({ error: 'E-postadressen används redan' });
     const hash = await bcrypt.hash(password, 10);
-    const initial = name.charAt(0).toUpperCase();
     const r = await pool.query(
-      `INSERT INTO customers (name, phone, email, password_hash, customer_type,
-       org_number, billing_address, preferred_payment, home_address, work_address,
-       profile_initial)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-       RETURNING id, name, email, phone, customer_type, preferred_payment,
-       profile_initial, created_at`,
-      [name, phone, email, hash, customer_type||'private',
-       org_number||null, billing_address||null,
-       preferred_payment||'swish', home_address||null, work_address||null, initial]
+      'INSERT INTO customers (name, phone, email, password_hash, customer_type, org_number, billing_address, preferred_payment, home_address, work_address, profile_initial) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11) RETURNING id, name, email, phone, customer_type, preferred_payment, profile_initial, created_at',
+      [name, phone, email, hash, customer_type||'private', org_number||null, billing_address||null, preferred_payment||'swish', home_address||null, work_address||null, name.charAt(0).toUpperCase()]
     );
     const customer = r.rows[0];
-    const token = jwt.sign(
-      { id: customer.id, email: customer.email, name: customer.name },
-      JWT_SECRET, { expiresIn: '30d' }
-    );
+    const token = jwt.sign({ id: customer.id, email: customer.email, name: customer.name }, JWT_SECRET, { expiresIn: '30d' });
     res.json({ customer, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -421,19 +438,14 @@ app.post('/customers/register', async (req, res) => {
 app.post('/customers/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    if (!email || !password)
-      return res.status(400).json({ error: 'E-post och lösenord krävs' });
+    if (!email || !password) return res.status(400).json({ error: 'E-post och lösenord krävs' });
     const r = await pool.query('SELECT * FROM customers WHERE email=$1', [email]);
-    if (r.rows.length === 0)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    if (!r.rows.length) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
     const customer = r.rows[0];
+    if (customer.blocked) return res.status(403).json({ error: 'Ditt konto är blockerat. Kontakta support.' });
     const valid = await bcrypt.compare(password, customer.password_hash);
-    if (!valid)
-      return res.status(401).json({ error: 'Fel e-post eller lösenord' });
-    const token = jwt.sign(
-      { id: customer.id, email: customer.email, name: customer.name },
-      JWT_SECRET, { expiresIn: '30d' }
-    );
+    if (!valid) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    const token = jwt.sign({ id: customer.id, email: customer.email, name: customer.name }, JWT_SECRET, { expiresIn: '30d' });
     delete customer.password_hash;
     res.json({ customer, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -442,53 +454,50 @@ app.post('/customers/login', async (req, res) => {
 app.get('/customers/profile', authMiddleware, async (req, res) => {
   try {
     const r = await pool.query(
-      `SELECT id, name, email, phone, customer_type, org_number,
-       billing_address, preferred_payment, home_address, work_address,
-       other_address, profile_initial, created_at
-       FROM customers WHERE id=$1`, [req.customer.id]
+      'SELECT id, name, email, phone, customer_type, org_number, billing_address, preferred_payment, home_address, work_address, other_address, profile_initial, created_at FROM customers WHERE id=$1',
+      [req.customer.id]
     );
-    if (r.rows.length === 0) return res.status(404).json({ error: 'Kund hittades inte' });
+    if (!r.rows.length) return res.status(404).json({ error: 'Kund hittades inte' });
     res.json({ customer: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 app.patch('/customers/profile', authMiddleware, async (req, res) => {
   try {
-    const { name, phone, preferred_payment, home_address,
-      work_address, other_address, org_number, billing_address } = req.body;
+    const { name, phone, preferred_payment, home_address, work_address, other_address, org_number, billing_address } = req.body;
     await pool.query(
-      `UPDATE customers SET
-       name=COALESCE($1,name), phone=COALESCE($2,phone),
-       preferred_payment=COALESCE($3,preferred_payment),
-       home_address=COALESCE($4,home_address),
-       work_address=COALESCE($5,work_address),
-       other_address=COALESCE($6,other_address),
-       org_number=COALESCE($7,org_number),
-       billing_address=COALESCE($8,billing_address)
-       WHERE id=$9`,
-      [name, phone, preferred_payment, home_address,
-       work_address, other_address, org_number, billing_address, req.customer.id]
+      'UPDATE customers SET name=COALESCE($1,name), phone=COALESCE($2,phone), preferred_payment=COALESCE($3,preferred_payment), home_address=COALESCE($4,home_address), work_address=COALESCE($5,work_address), other_address=COALESCE($6,other_address), org_number=COALESCE($7,org_number), billing_address=COALESCE($8,billing_address) WHERE id=$9',
+      [name, phone, preferred_payment, home_address, work_address, other_address, org_number, billing_address, req.customer.id]
     );
     const r = await pool.query(
-      `SELECT id, name, email, phone, customer_type, org_number,
-       billing_address, preferred_payment, home_address, work_address,
-       other_address, profile_initial FROM customers WHERE id=$1`,
+      'SELECT id, name, email, phone, customer_type, org_number, billing_address, preferred_payment, home_address, work_address, other_address, profile_initial FROM customers WHERE id=$1',
       [req.customer.id]
     );
     res.json({ customer: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.patch('/customers/change-password', authMiddleware, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
+    const r = await pool.query('SELECT * FROM customers WHERE id=$1', [req.customer.id]);
+    const valid = await bcrypt.compare(current_password, r.rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: 'Fel nuvarande lösenord' });
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE customers SET password_hash=$1 WHERE id=$2', [hash, req.customer.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/bookings/:id/rate', authMiddleware, async (req, res) => {
   try {
     const { rating } = req.body;
-    const { id } = req.params;
-    const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
+    const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [req.params.id]);
     if (b.rows[0]?.driver_id) {
       const d = await pool.query('SELECT rating FROM drivers WHERE id=$1', [b.rows[0].driver_id]);
       const newRating = ((d.rows[0].rating * 10) + rating) / 11;
-      await pool.query('UPDATE drivers SET rating=$1 WHERE id=$2',
-        [newRating.toFixed(2), b.rows[0].driver_id]);
+      await pool.query('UPDATE drivers SET rating=$1 WHERE id=$2', [newRating.toFixed(2), b.rows[0].driver_id]);
     }
     res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -497,10 +506,7 @@ app.post('/bookings/:id/rate', authMiddleware, async (req, res) => {
 // ── MESSAGES ──
 app.get('/messages/:threadKey', async (req, res) => {
   try {
-    const r = await pool.query(
-      `SELECT * FROM messages WHERE thread_key=$1 ORDER BY created_at ASC`,
-      [req.params.threadKey]
-    );
+    const r = await pool.query('SELECT * FROM messages WHERE thread_key=$1 ORDER BY created_at ASC', [req.params.threadKey]);
     res.json({ messages: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -509,8 +515,7 @@ app.post('/messages', async (req, res) => {
   try {
     const { thread_key, sender_name, sender_role, content } = req.body;
     const r = await pool.query(
-      `INSERT INTO messages (thread_key, sender_name, sender_role, content)
-       VALUES ($1,$2,$3,$4) RETURNING *`,
+      'INSERT INTO messages (thread_key, sender_name, sender_role, content) VALUES ($1,$2,$3,$4) RETURNING *',
       [thread_key, sender_name, sender_role, content]
     );
     io.emit('message:new:' + r.rows[0].thread_key, r.rows[0]);
@@ -528,23 +533,14 @@ app.post('/test-gps', (req, res) => {
 // ── SOCKET ──
 io.on('connection', (socket) => {
   console.log('Connected: ' + socket.id);
-  socket.on('central:join', () => {
-    socket.join('central');
-    console.log('Central joined');
-  });
-  socket.on('driver:join', (driverId) => {
-    socket.join('driver-' + driverId);
-    console.log('Driver joined room: driver-' + driverId);
-  });
-  socket.on('customer:join', (bookingId) => {
-    socket.join('booking-' + bookingId);
-  });
+  socket.on('central:join', () => { socket.join('central'); console.log('Central joined'); });
+  socket.on('driver:join', (driverId) => { socket.join('driver-' + driverId); console.log('Driver joined: driver-' + driverId); });
+  socket.on('customer:join', (bookingId) => { socket.join('booking-' + bookingId); });
   socket.on('driver:location', async (data) => {
     const { driverId, lat, lng } = data;
     driverPositions[driverId] = { lat, lng, updatedAt: new Date() };
-    try {
-      await pool.query('UPDATE drivers SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, driverId]);
-    } catch (err) { console.log('GPS error: ' + err.message); }
+    try { await pool.query('UPDATE drivers SET lat=$1, lng=$2, last_active=NOW() WHERE id=$3', [lat, lng, driverId]); }
+    catch (err) { console.log('GPS error: ' + err.message); }
     io.to('central').emit('driver:location', { driverId, lat, lng });
     io.emit('driver:location:' + driverId, { driverId, lat, lng });
   });
@@ -555,12 +551,10 @@ io.on('connection', (socket) => {
       io.emit('driver:status', { driverId, status });
     } catch (err) { console.log('Status error: ' + err.message); }
   });
-  socket.on('disconnect', () => {
-    console.log('Disconnected: ' + socket.id);
-  });
+  socket.on('disconnect', () => { console.log('Disconnected: ' + socket.id); });
 });
 
 server.listen(PORT, () => {
-  console.log('Waygo API v5.3 on port ' + PORT);
+  console.log('Waygo API v5.4 on port ' + PORT);
   console.log('Socket.io ready');
 });
