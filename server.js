@@ -120,6 +120,19 @@ app.post('/staff/add', adminMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.patch('/staff/change-password', staffMiddleware, async (req, res) => {
+  try {
+    const { current_password, new_password } = req.body;
+    if (!current_password || !new_password) return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
+    const r = await pool.query('SELECT * FROM staff WHERE id=$1', [req.staff.id]);
+    const valid = await bcrypt.compare(current_password, r.rows[0].password_hash);
+    if (!valid) return res.status(401).json({ error: 'Fel nuvarande lösenord' });
+    const hash = await bcrypt.hash(new_password, 10);
+    await pool.query('UPDATE staff SET password_hash=$1 WHERE id=$2', [hash, req.staff.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.patch('/staff/:id', adminMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
@@ -141,19 +154,6 @@ app.patch('/staff/:id', adminMiddleware, async (req, res) => {
     }
     const r = await pool.query('SELECT id, name, email, role, level, created_at FROM staff WHERE id=$1', [id]);
     res.json({ staff: r.rows[0] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/staff/change-password', staffMiddleware, async (req, res) => {
-  try {
-    const { current_password, new_password } = req.body;
-    if (!current_password || !new_password) return res.status(400).json({ error: 'Ange nuvarande och nytt lösenord' });
-    const r = await pool.query('SELECT * FROM staff WHERE id=$1', [req.staff.id]);
-    const valid = await bcrypt.compare(current_password, r.rows[0].password_hash);
-    if (!valid) return res.status(401).json({ error: 'Fel nuvarande lösenord' });
-    const hash = await bcrypt.hash(new_password, 10);
-    await pool.query('UPDATE staff SET password_hash=$1 WHERE id=$2', [hash, req.staff.id]);
-    res.json({ success: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
