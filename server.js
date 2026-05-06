@@ -4,7 +4,17 @@ const cors = require('cors');
 const { Pool } = require('pg');
 const http = require('http');
 const { Server } = require('socket.io');
-const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+let stripe = null;
+try {
+  if (process.env.STRIPE_SECRET_KEY) {
+    stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
+    console.log('Stripe initialized');
+  } else {
+    console.log('Stripe not configured - payment routes disabled');
+  }
+} catch(e) {
+  console.log('Stripe init error:', e.message);
+}
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -606,6 +616,7 @@ app.post('/bookings/:id/driver-message', async (req, res) => {
 
 // Create payment intent for card payment
 app.post('/payments/create-intent', async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Betalning ej konfigurerad' });
   try {
     const { amount, booking_ref, customer_email } = req.body;
     if (!amount || amount < 10) return res.status(400).json({ error: 'Ogiltigt belopp' });
@@ -627,6 +638,7 @@ app.post('/payments/create-intent', async (req, res) => {
 
 // Confirm payment and update booking
 app.post('/payments/confirm', async (req, res) => {
+  if (!stripe) return res.status(503).json({ error: 'Betalning ej konfigurerad' });
   try {
     const { payment_intent_id, booking_id } = req.body;
     const intent = await stripe.paymentIntents.retrieve(payment_intent_id);
