@@ -191,11 +191,12 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
 app.post('/bookings', async (req, res) => {
   try {
     const { customer_name, customer_phone, from_address, to_address,
-      payment_method, fare_sek, scheduled_at, booking_type, customer_id } = req.body;
+      payment_method, fare_sek, scheduled_at, booking_type, customer_id,
+      passengers, child_seat, child_age } = req.body;
     const ref = 'W-' + Date.now().toString().slice(-6);
     const r = await pool.query(
-      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING *',
-      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null]
+      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id, passengers, child_seat, child_age) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *',
+      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null, passengers||1, child_seat||false, child_age||null]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
@@ -246,7 +247,7 @@ app.patch('/bookings/:id/decline', async (req, res) => {
         [blockedUntil, 'Avböjde bokning — tillfälligt blockerad 2 min', driver_id]
       );
       // Notify central
-      io.to('central').emit('booking:declined', {
+      io.emit('booking:declined', {
         bookingId: parseInt(id),
         driverId: driver_id
       });
@@ -345,9 +346,16 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
       await pool.query('UPDATE drivers SET blocked=true WHERE id=$1', [id]);
     } else if (action === 'unblock') {
       await pool.query('UPDATE drivers SET blocked=false, suspended_until=NULL, suspend_reason=NULL WHERE id=$1', [id]);
+      io.to('driver-' + id).emit('driver:unblocked', {});
+      io.emit('driver:status', { driverId: parseInt(id), status: 'available' });
     } else if (action === 'suspend') {
       await pool.query('UPDATE drivers SET suspended_until=$1, suspend_reason=$2 WHERE id=$3', [suspend_until||null, reason||null, id]);
-    } else if (action === 'set_owner') {
+    } else if (action === 'lift_block') {
+      await pool.query(
+        'UPDATE drivers SET suspended_until=NULL, suspend_reason=NULL WHERE id=$1', [id]
+      );
+      io.to('driver-' + id).emit('driver:unblocked', {});
+      io.emit('driver:status', { driverId: parseInt(id), status: 'available' });
       await pool.query('UPDATE drivers SET is_owner=true, owner_share=$1 WHERE id=$2', [owner_share||0, id]);
     } else if (action === 'remove_owner') {
       await pool.query('UPDATE drivers SET is_owner=false, owner_share=0 WHERE id=$1', [id]);
@@ -536,25 +544,6 @@ app.post('/messages', async (req, res) => {
     );
     io.emit('message:new:' + r.rows[0].thread_key, r.rows[0]);
     res.json({ message: r.rows[0] });
-  } catch (err) { res.status(500).json({ error: err.message }); }
-});
-
-app.patch('/bookings/:id/decline', async (req, res) => {
-  try {
-    const { id } = req.params;
-    const { driver_id } = req.body;
-    await pool.query(
-      'UPDATE bookings SET status=\'pending\', driver_id=NULL, assigned_at=NULL WHERE id=$1', [id]
-    );
-    const blockedUntil = new Date(Date.now() + 2 * 60 * 1000);
-    await pool.query(
-      'UPDATE drivers SET status=\'offline\', suspended_until=$1, suspend_reason=$2 WHERE id=$3',
-      [blockedUntil, 'Nekade bokning — 2 min spärr', driver_id]
-    );
-    const r = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
-    io.to('central').emit('booking:declined', { bookingId: parseInt(id), driverId: driver_id });
-    io.emit('booking:pending', r.rows[0]);
-    res.json({ success: true, blocked_until: blockedUntil });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
