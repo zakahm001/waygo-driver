@@ -1,8 +1,10 @@
+require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const { Pool } = require('pg');
 const http = require('http');
 const { Server } = require('socket.io');
+const stripe = require('stripe')(process.env.STRIPE_SECRET_KEY);
 const bcrypt = require('bcryptjs');
 const jwt = require('jsonwebtoken');
 
@@ -589,6 +591,174 @@ io.on('connection', (socket) => {
     } catch (err) { console.log('Status error: ' + err.message); }
   });
   socket.on('disconnect', () => { console.log('Disconnected: ' + socket.id); });
+});
+
+// Driver sends status message to customer
+app.post('/bookings/:id/driver-message', async (req, res) => {
+  try {
+    const { message, phone } = req.body;
+    if (phone && message) sendSMS(phone, message);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── STRIPE PAYMENT ROUTES ──
+
+// Create payment intent for card payment
+app.post('/payments/create-intent', async (req, res) => {
+  try {
+    const { amount, booking_ref, customer_email } = req.body;
+    if (!amount || amount < 10) return res.status(400).json({ error: 'Ogiltigt belopp' });
+    const paymentIntent = await stripe.paymentIntents.create({
+      amount: Math.round(amount * 100), // Convert SEK to öre
+      currency: 'sek',
+      metadata: { booking_ref: booking_ref || '', customer_email: customer_email || '' },
+      automatic_payment_methods: { enabled: true },
+    });
+    res.json({
+      client_secret: paymentIntent.client_secret,
+      payment_intent_id: paymentIntent.id
+    });
+  } catch (err) {
+    console.error('Stripe error:', err.message);
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Confirm payment and update booking
+app.post('/payments/confirm', async (req, res) => {
+  try {
+    const { payment_intent_id, booking_id } = req.body;
+    const intent = await stripe.paymentIntents.retrieve(payment_intent_id);
+    if (intent.status === 'succeeded') {
+      await pool.query(
+        'UPDATE bookings SET payment_status=$1 WHERE id=$2',
+        ['paid', booking_id]
+      );
+      res.json({ success: true, status: 'paid' });
+    } else {
+      res.json({ success: false, status: intent.status });
+    }
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Get payment status for a booking
+app.get('/payments/status/:bookingId', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT payment_status, payment_method, fare_sek, booking_ref FROM bookings WHERE id=$1', [req.params.bookingId]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Bokning hittades inte' });
+    res.json(r.rows[0]);
+  } catch (err) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Stripe webhook
+app.post('/payments/webhook', express.raw({ type: 'application/json' }), async (req, res) => {
+  try {
+    const event = stripe.webhooks.constructEvent(
+      req.body,
+      req.headers['stripe-signature'],
+      process.env.STRIPE_WEBHOOK_SECRET || ''
+    );
+    if (event.type === 'payment_intent.succeeded') {
+      const intent = event.data.object;
+      const ref = intent.metadata.booking_ref;
+      if (ref) {
+        await pool.query('UPDATE bookings SET payment_status=$1 WHERE booking_ref=$2', ['paid', ref]);
+        console.log('Payment confirmed for', ref);
+      }
+    }
+    res.json({ received: true });
+  } catch (err) {
+    console.error('Webhook error:', err.message);
+    res.status(400).json({ error: err.message });
+  }
+});
+
+// ── COMPANIES ROUTES ──
+
+app.get('/companies', staffMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM companies ORDER BY created_at DESC');
+    res.json({ companies: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/companies/add', adminMiddleware, async (req, res) => {
+  try {
+    const { name, org_number, contact_email, contact_phone, agreement_date, notes } = req.body;
+    if (!name || !org_number) return res.status(400).json({ error: 'Namn och org.nr krävs' });
+    const r = await pool.query(
+      'INSERT INTO companies (name, org_number, contact_email, contact_phone, agreement_date, notes, status) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
+      [name, org_number, contact_email||null, contact_phone||null, agreement_date||null, notes||null, 'active']
+    );
+    res.json({ company: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/companies/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { name, org_number, contact_email, contact_phone, agreement_date, notes, status } = req.body;
+    const r = await pool.query(
+      'UPDATE companies SET name=$1, org_number=$2, contact_email=$3, contact_phone=$4, agreement_date=$5, notes=$6, status=$7 WHERE id=$8 RETURNING *',
+      [name, org_number, contact_email, contact_phone, agreement_date, notes, status, req.params.id]
+    );
+    res.json({ company: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/companies/:id', adminMiddleware, async (req, res) => {
+  try {
+    await pool.query('UPDATE drivers SET company_id=NULL WHERE company_id=$1', [req.params.id]);
+    await pool.query('DELETE FROM companies WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Assign driver to company
+app.patch('/companies/:id/assign-driver', adminMiddleware, async (req, res) => {
+  try {
+    const { driver_id } = req.body;
+    await pool.query('UPDATE drivers SET company_id=$1 WHERE id=$2', [req.params.id, driver_id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ECONOMY ROUTES ──
+
+app.get('/economy/summary', staffMiddleware, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const [todayR, weekR, monthR, driversR] = await Promise.all([
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND DATE(created_at)=$1", [today]),
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND created_at >= NOW() - INTERVAL '7 days'"),
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND created_at >= NOW() - INTERVAL '30 days'"),
+      pool.query("SELECT d.id, d.name, d.plate, d.owner_share, d.is_owner, COALESCE(SUM(b.fare_sek),0) as earnings, COUNT(b.id) as trips FROM drivers d LEFT JOIN bookings b ON b.driver_id=d.id AND b.status='completed' AND b.created_at >= NOW() - INTERVAL '30 days' GROUP BY d.id ORDER BY earnings DESC"),
+    ]);
+    res.json({
+      today: todayR.rows[0],
+      week: weekR.rows[0],
+      month: monthR.rows[0],
+      drivers: driversR.rows
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/economy/bookings', staffMiddleware, async (req, res) => {
+  try {
+    const { from, to, status } = req.query;
+    let q = "SELECT b.*, d.name as driver_name FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE 1=1";
+    const params = [];
+    if (from) { params.push(from); q += ` AND DATE(b.created_at) >= $${params.length}`; }
+    if (to) { params.push(to); q += ` AND DATE(b.created_at) <= $${params.length}`; }
+    if (status) { params.push(status); q += ` AND b.status = $${params.length}`; }
+    q += ' ORDER BY b.created_at DESC LIMIT 500';
+    const r = await pool.query(q, params);
+    res.json({ bookings: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 server.listen(PORT, () => {
