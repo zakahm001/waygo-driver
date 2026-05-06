@@ -536,7 +536,7 @@ function tabProfile(){
     '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">'+
     '<span class="badge b-blue">'+(driver.taxi_nr||'')+'</span>'+
     '<span class="badge b-gray">'+(driver.plate||'')+'</span>'+
-    '<span class="badge b-gray">'+(driver.city||'Trollhättan')+'</span></div></div></div>'+
+    '<span class="badge b-gray">'+(driver.city||'Trollhättan')+'</span>'+(driver.is_owner?' <span class="badge" style="background:#fef3c7;color:#d97706;border:1px solid #fde68a">👑 Ägare</span>':'')+'</div></div></div>'+
     '<div style="padding:20px;background:#eef1f8">'+
     '<div class="card"><div class="stitle">Statistik idag</div>'+
     '<div class="list-item"><span style="font-size:14px;color:#0d1b3e">Avslutade resor</span><span style="font-size:14px;font-weight:700;color:#15803d">'+(driver.trips_today||0)+'</span></div>'+
