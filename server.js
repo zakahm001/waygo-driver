@@ -220,7 +220,8 @@ app.patch('/bookings/:id/assign', async (req, res) => {
     );
     const booking = r.rows[0];
     io.emit('booking:assigned', booking);
-    io.to('driver-' + driver_id).emit('booking:assigned:driver', booking);
+    // Broadcast to all - driver app filters by own ID to avoid missing room
+    io.emit('booking:assigned:driver', booking);
     if (booking.customer_phone) {
       sendSMS(booking.customer_phone,
         'Trollhättan Cab: Din förare ' + booking.driver_name + ' är på väg! Bokning ' + booking.booking_ref + '. Skylt: ' + (booking.driver_plate||'') + '. Frågor? Ring: 0520-000000'
