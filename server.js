@@ -229,6 +229,51 @@ app.patch('/bookings/:id/assign', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+app.patch('/bookings/:id/decline', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { driver_id } = req.body;
+    // Return booking to pending
+    await pool.query(
+      'UPDATE bookings SET status=\'pending\', driver_id=NULL, assigned_at=NULL WHERE id=$1',
+      [id]
+    );
+    // Block driver for 2 minutes
+    if (driver_id) {
+      const blockedUntil = new Date(Date.now() + 2 * 60 * 1000);
+      await pool.query(
+        'UPDATE drivers SET status=\'offline\', suspended_until=$1, suspend_reason=$2 WHERE id=$3',
+        [blockedUntil, 'Avböjde bokning — tillfälligt blockerad 2 min', driver_id]
+      );
+      // Notify central
+      io.to('central').emit('booking:declined', {
+        bookingId: parseInt(id),
+        driverId: driver_id
+      });
+      // Notify driver
+      io.to('driver-' + driver_id).emit('driver:blocked', {
+        until: blockedUntil,
+        reason: 'Du avböjde en bokning. Du är blockerad i 2 minuter.'
+      });
+      // Unblock driver after 2 minutes
+      setTimeout(async () => {
+        try {
+          await pool.query(
+            'UPDATE drivers SET status=\'available\', suspended_until=NULL, suspend_reason=NULL WHERE id=$1',
+            [driver_id]
+          );
+          io.emit('driver:status', { driverId: driver_id, status: 'available' });
+          io.to('driver-' + driver_id).emit('driver:unblocked', {});
+        } catch(e) { console.log('Unblock error:', e.message); }
+      }, 2 * 60 * 1000);
+    }
+    // Return booking to central as pending
+    const r = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
+    io.emit('booking:returned', r.rows[0]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.patch('/bookings/:id/complete', async (req, res) => {
   try {
     const { id } = req.params;
@@ -491,6 +536,38 @@ app.post('/messages', async (req, res) => {
     );
     io.emit('message:new:' + r.rows[0].thread_key, r.rows[0]);
     res.json({ message: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/bookings/:id/decline', async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { driver_id } = req.body;
+    await pool.query(
+      'UPDATE bookings SET status=\'pending\', driver_id=NULL, assigned_at=NULL WHERE id=$1', [id]
+    );
+    const blockedUntil = new Date(Date.now() + 2 * 60 * 1000);
+    await pool.query(
+      'UPDATE drivers SET status=\'offline\', suspended_until=$1, suspend_reason=$2 WHERE id=$3',
+      [blockedUntil, 'Nekade bokning — 2 min spärr', driver_id]
+    );
+    const r = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
+    io.to('central').emit('booking:declined', { bookingId: parseInt(id), driverId: driver_id });
+    io.emit('booking:pending', r.rows[0]);
+    res.json({ success: true, blocked_until: blockedUntil });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/drivers/queue', async (req, res) => {
+  try {
+    const r = await pool.query(
+      `SELECT id, name, plate, taxi_nr, city, rating, trips_today, earnings_today, status, last_active
+       FROM drivers
+       WHERE status='available' AND (blocked=false OR blocked IS NULL)
+       AND (suspended_until IS NULL OR suspended_until < NOW())
+       ORDER BY last_active ASC`
+    );
+    res.json({ queue: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
