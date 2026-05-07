@@ -221,141 +221,86 @@ app.post('/bookings', async (req, res) => {
       );
     }
     res.json({ booking });
-    // Start auto-dispatch queue
-    autoDispatch(booking);
+    // Notify drivers via dispatch
+    notifyAvailableDrivers(booking);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// ── AUTO DISPATCH SYSTEM ──
-async function autoDispatch(booking) {
+// ── SIMPLE DISPATCH — notify all available drivers, first to accept wins ──
+async function notifyAvailableDrivers(booking) {
   try {
-    // Get available drivers sorted by last_active (longest idle first)
     const r = await pool.query(
       "SELECT * FROM drivers WHERE status='available' AND blocked=false AND (suspended_until IS NULL OR suspended_until < NOW()) ORDER BY last_active ASC NULLS FIRST"
     );
-    const drivers = r.rows;
-    if (!drivers.length) {
-      // No drivers available — notify Central
-      io.emit('dispatch:failed', {
+    if (!r.rows.length) {
+      io.emit('dispatch:status', {
         booking_id: booking.id,
         booking_ref: booking.booking_ref,
-        reason: 'Inga tillgängliga förare'
+        message: '⚠️ Inga tillgängliga förare — tilldela manuellt',
+        status: 'failed'
       });
       return;
     }
-    // Try each driver in queue order
-    await tryNextDriver(booking, drivers, 0);
-  } catch (err) {
-    console.log('Auto-dispatch error:', err.message);
-  }
-}
-
-async function tryNextDriver(booking, drivers, index) {
-  // Check if booking was already assigned manually or cancelled
-  try {
-    const check = await pool.query("SELECT status, driver_id FROM bookings WHERE id=$1", [booking.id]);
-    if (!check.rows.length || check.rows[0].status !== 'pending') return;
-  } catch(e) { return; }
-
-  if (index >= drivers.length) {
-    // All drivers tried — send to Central
-    io.emit('dispatch:failed', {
-      booking_id: booking.id,
-      booking_ref: booking.booking_ref,
-      reason: 'Alla förare nekade eller svarade inte'
+    // Store in pending dispatches for ALL available drivers
+    // Each driver polls and first to accept wins
+    r.rows.forEach(driver => {
+      const payload = Object.assign({}, booking, { driver_id: driver.id, _auto: true });
+      pendingDispatches.set(driver.id, { booking: payload, expires: Date.now() + 120000 });
+      io.to('driver-' + driver.id).emit('booking:assigned:driver', payload);
     });
     io.emit('dispatch:status', {
       booking_id: booking.id,
       booking_ref: booking.booking_ref,
-      message: '⚠️ Alla förare nekade — manuell tilldelning krävs',
-      driver_name: null,
-      status: 'failed'
+      message: '🔄 Söker förare... (' + r.rows.length + ' tillgängliga)',
+      status: 'trying',
+      queue_total: r.rows.length
     });
-    return;
-  }
-
-  const driver = drivers[index];
-
-  // Notify Central who we are trying
-  io.emit('dispatch:status', {
-    booking_id: booking.id,
-    booking_ref: booking.booking_ref,
-    message: '🔄 Försöker nå ' + driver.name + '...',
-    driver_name: driver.name,
-    driver_id: driver.id,
-    queue_position: index + 1,
-    queue_total: drivers.length,
-    status: 'trying'
-  });
-
-  // Store pending dispatch so driver gets it on reconnect
-  const dispatchPayload = Object.assign({}, booking, {
-    driver_id: driver.id,
-    _dispatch_attempt: true
-  });
-  pendingDispatches.set(driver.id, {
-    booking: dispatchPayload,
-    expires: Date.now() + 35000
-  });
-
-  // Send to driver room AND broadcast with driver_id set
-  io.to('driver-' + driver.id).emit('booking:assigned:driver', dispatchPayload);
-  // Also broadcast as fallback
-  io.emit('booking:assigned:driver', dispatchPayload);
-
-  // Wait 32 seconds for response (30s countdown + 2s buffer)
-  await new Promise(resolve => setTimeout(resolve, 32000));
-
-  // Check if driver accepted
-  try {
-    const result = await pool.query("SELECT status, driver_id FROM bookings WHERE id=$1", [booking.id]);
-    if (!result.rows.length) return;
-    const b = result.rows[0];
-    if (b.status === 'assigned' && b.driver_id === driver.id) {
-      // Driver accepted
-      io.emit('dispatch:status', {
-        booking_id: booking.id,
-        booking_ref: booking.booking_ref,
-        message: '✅ ' + driver.name + ' accepterade bokningen',
-        driver_name: driver.name,
-        status: 'accepted'
-      });
-      return;
-    }
-    if (b.status !== 'pending') return; // Manually handled
-  } catch(e) { return; }
-
-  // Driver did not respond — try next
-  io.emit('dispatch:status', {
-    booking_id: booking.id,
-    booking_ref: booking.booking_ref,
-    message: '⏭ ' + driver.name + ' svarade inte — provar nästa förare',
-    driver_name: driver.name,
-    status: 'no_response'
-  });
-
-  await tryNextDriver(booking, drivers, index + 1);
+    // After 120 seconds if still pending — alert Central
+    setTimeout(async () => {
+      try {
+        const check = await pool.query("SELECT status FROM bookings WHERE id=$1", [booking.id]);
+        if (check.rows[0] && check.rows[0].status === 'pending') {
+          io.emit('dispatch:failed', { booking_id: booking.id, booking_ref: booking.booking_ref, reason: 'Ingen förare accepterade — tilldela manuellt' });
+        }
+      } catch(e) {}
+    }, 120000);
+  } catch(e) { console.log('Dispatch error:', e.message); }
 }
 
-// Driver accepts auto-dispatched booking
+// Driver accepts booking — works for auto-dispatch AND manual assign
 app.patch('/bookings/:id/accept', async (req, res) => {
   try {
     const { driver_id } = req.body;
-    // Clear pending dispatch
-    pendingDispatches.delete(parseInt(driver_id));
     const { id } = req.params;
-    // Check booking is still pending
-    const check = await pool.query("SELECT status FROM bookings WHERE id=$1", [id]);
+    const driverId = parseInt(driver_id);
+    // Check booking
+    const check = await pool.query("SELECT status, driver_id FROM bookings WHERE id=$1", [id]);
     if (!check.rows.length) return res.status(404).json({ error: 'Bokning hittades inte' });
-    if (check.rows[0].status !== 'pending') return res.status(409).json({ error: 'Bokning är inte längre tillgänglig' });
+    const b = check.rows[0];
+    // Allow if: pending, OR already assigned to THIS driver
+    if (b.status === 'cancelled') return res.status(409).json({ error: 'Bokning är avbokad' });
+    if (b.status === 'completed') return res.status(409).json({ error: 'Bokning är redan avslutad' });
+    if (b.status === 'assigned' && parseInt(b.driver_id) !== driverId) {
+      return res.status(409).json({ error: 'Bokning är tilldelad annan förare' });
+    }
+    // Clear ALL pending dispatches for this booking
+    pendingDispatches.forEach((val, key) => {
+      if (val.booking && parseInt(val.booking.id) === parseInt(id)) {
+        pendingDispatches.delete(key);
+      }
+    });
     // Assign to driver
-    await pool.query('UPDATE bookings SET driver_id=$1, status=\'assigned\', assigned_at=NOW() WHERE id=$2', [driver_id, id]);
-    await pool.query('UPDATE drivers SET status=$1, last_active=NOW() WHERE id=$2', ['busy', driver_id]);
+    await pool.query("UPDATE bookings SET driver_id=$1, status='assigned', assigned_at=NOW() WHERE id=$2", [driverId, id]);
+    await pool.query("UPDATE drivers SET status='busy', last_active=NOW() WHERE id=$1", [driverId]);
     const r = await pool.query(
       'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
     );
     const booking = r.rows[0];
     io.emit('booking:assigned', booking);
+    io.emit('dispatch:status', {
+      booking_id: parseInt(id), booking_ref: booking.booking_ref,
+      message: '✅ ' + booking.driver_name + ' accepterade', driver_name: booking.driver_name, status: 'accepted'
+    });
     if (booking.customer_phone) {
       sendSMS(booking.customer_phone,
         'Trollhättan Cab: Din förare ' + booking.driver_name + ' är på väg! Bokning ' + booking.booking_ref + '. Skylt: ' + (booking.driver_plate||'')
@@ -491,9 +436,10 @@ app.get('/drivers/:id/pending-booking', async (req, res) => {
     if (pending && pending.expires > Date.now()) {
       return res.json({ booking: pending.booking });
     }
-    // Also check database for bookings assigned to this driver that are still pending
+    // Check database for bookings assigned to this driver that need acceptance
+    // This covers manual Central assigns
     const r = await pool.query(
-      "SELECT * FROM bookings WHERE driver_id=$1 AND status='pending' ORDER BY created_at DESC LIMIT 1",
+      "SELECT * FROM bookings WHERE driver_id=$1 AND status='assigned' AND assigned_at > NOW() - INTERVAL '5 minutes' ORDER BY created_at DESC LIMIT 1",
       [driverId]
     );
     if (r.rows.length) {
