@@ -482,6 +482,27 @@ app.get('/drivers', async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+// Driver polls this every 3 seconds to check for pending booking
+app.get('/drivers/:id/pending-booking', async (req, res) => {
+  try {
+    const driverId = parseInt(req.params.id);
+    // Check pending dispatch cache first
+    const pending = pendingDispatches.get(driverId);
+    if (pending && pending.expires > Date.now()) {
+      return res.json({ booking: pending.booking });
+    }
+    // Also check database for bookings assigned to this driver that are still pending
+    const r = await pool.query(
+      "SELECT * FROM bookings WHERE driver_id=$1 AND status='pending' ORDER BY created_at DESC LIMIT 1",
+      [driverId]
+    );
+    if (r.rows.length) {
+      return res.json({ booking: r.rows[0] });
+    }
+    res.json({ booking: null });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.get('/drivers/:id', staffMiddleware, async (req, res) => {
   try {
     const r = await pool.query('SELECT * FROM drivers WHERE id=$1', [req.params.id]);
