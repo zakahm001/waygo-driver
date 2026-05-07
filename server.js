@@ -480,7 +480,6 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
       );
       io.to('driver-' + id).emit('driver:unblocked', {});
       io.emit('driver:status', { driverId: parseInt(id), status: 'available' });
-      await pool.query('UPDATE drivers SET is_owner=true, owner_share=$1 WHERE id=$2', [owner_share||0, id]);
     } else if (action === 'remove_owner') {
       await pool.query('UPDATE drivers SET is_owner=false, owner_share=0 WHERE id=$1', [id]);
     } else if (action === 'update') {
