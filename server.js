@@ -207,11 +207,11 @@ app.post('/bookings', async (req, res) => {
   try {
     const { customer_name, customer_phone, from_address, to_address,
       payment_method, fare_sek, scheduled_at, booking_type, customer_id,
-      passengers, child_seat, child_age } = req.body;
+      passengers, child_seat, child_age, driver_note } = req.body;
     const ref = 'W-' + Date.now().toString().slice(-6);
     const r = await pool.query(
-      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id, passengers, child_seat, child_age) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13) RETURNING *',
-      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null, passengers||1, child_seat||false, child_age||null]
+      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id, passengers, child_seat, child_age, driver_note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *',
+      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null, passengers||1, child_seat||false, child_age||null, driver_note||null]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
