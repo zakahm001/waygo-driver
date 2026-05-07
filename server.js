@@ -218,6 +218,136 @@ app.post('/bookings', async (req, res) => {
       );
     }
     res.json({ booking });
+    // Start auto-dispatch queue
+    autoDispatch(booking);
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── AUTO DISPATCH SYSTEM ──
+async function autoDispatch(booking) {
+  try {
+    // Get available drivers sorted by last_active (longest idle first)
+    const r = await pool.query(
+      "SELECT * FROM drivers WHERE status='available' AND blocked=false AND (suspended_until IS NULL OR suspended_until < NOW()) ORDER BY last_active ASC NULLS FIRST"
+    );
+    const drivers = r.rows;
+    if (!drivers.length) {
+      // No drivers available — notify Central
+      io.emit('dispatch:failed', {
+        booking_id: booking.id,
+        booking_ref: booking.booking_ref,
+        reason: 'Inga tillgängliga förare'
+      });
+      return;
+    }
+    // Try each driver in queue order
+    await tryNextDriver(booking, drivers, 0);
+  } catch (err) {
+    console.log('Auto-dispatch error:', err.message);
+  }
+}
+
+async function tryNextDriver(booking, drivers, index) {
+  // Check if booking was already assigned manually or cancelled
+  try {
+    const check = await pool.query("SELECT status, driver_id FROM bookings WHERE id=$1", [booking.id]);
+    if (!check.rows.length || check.rows[0].status !== 'pending') return;
+  } catch(e) { return; }
+
+  if (index >= drivers.length) {
+    // All drivers tried — send to Central
+    io.emit('dispatch:failed', {
+      booking_id: booking.id,
+      booking_ref: booking.booking_ref,
+      reason: 'Alla förare nekade eller svarade inte'
+    });
+    io.emit('dispatch:status', {
+      booking_id: booking.id,
+      booking_ref: booking.booking_ref,
+      message: '⚠️ Alla förare nekade — manuell tilldelning krävs',
+      driver_name: null,
+      status: 'failed'
+    });
+    return;
+  }
+
+  const driver = drivers[index];
+
+  // Notify Central who we are trying
+  io.emit('dispatch:status', {
+    booking_id: booking.id,
+    booking_ref: booking.booking_ref,
+    message: '🔄 Försöker nå ' + driver.name + '...',
+    driver_name: driver.name,
+    driver_id: driver.id,
+    queue_position: index + 1,
+    queue_total: drivers.length,
+    status: 'trying'
+  });
+
+  // Send booking to this driver
+  io.emit('booking:assigned:driver', Object.assign({}, booking, {
+    driver_id: driver.id,
+    _dispatch_attempt: true
+  }));
+
+  // Wait 32 seconds for response (30s countdown + 2s buffer)
+  await new Promise(resolve => setTimeout(resolve, 32000));
+
+  // Check if driver accepted
+  try {
+    const result = await pool.query("SELECT status, driver_id FROM bookings WHERE id=$1", [booking.id]);
+    if (!result.rows.length) return;
+    const b = result.rows[0];
+    if (b.status === 'assigned' && b.driver_id === driver.id) {
+      // Driver accepted
+      io.emit('dispatch:status', {
+        booking_id: booking.id,
+        booking_ref: booking.booking_ref,
+        message: '✅ ' + driver.name + ' accepterade bokningen',
+        driver_name: driver.name,
+        status: 'accepted'
+      });
+      return;
+    }
+    if (b.status !== 'pending') return; // Manually handled
+  } catch(e) { return; }
+
+  // Driver did not respond — try next
+  io.emit('dispatch:status', {
+    booking_id: booking.id,
+    booking_ref: booking.booking_ref,
+    message: '⏭ ' + driver.name + ' svarade inte — provar nästa förare',
+    driver_name: driver.name,
+    status: 'no_response'
+  });
+
+  await tryNextDriver(booking, drivers, index + 1);
+}
+
+// Driver accepts auto-dispatched booking
+app.patch('/bookings/:id/accept', async (req, res) => {
+  try {
+    const { driver_id } = req.body;
+    const { id } = req.params;
+    // Check booking is still pending
+    const check = await pool.query("SELECT status FROM bookings WHERE id=$1", [id]);
+    if (!check.rows.length) return res.status(404).json({ error: 'Bokning hittades inte' });
+    if (check.rows[0].status !== 'pending') return res.status(409).json({ error: 'Bokning är inte längre tillgänglig' });
+    // Assign to driver
+    await pool.query('UPDATE bookings SET driver_id=$1, status=\'assigned\', assigned_at=NOW() WHERE id=$2', [driver_id, id]);
+    await pool.query('UPDATE drivers SET status=$1, last_active=NOW() WHERE id=$2', ['busy', driver_id]);
+    const r = await pool.query(
+      'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
+    );
+    const booking = r.rows[0];
+    io.emit('booking:assigned', booking);
+    if (booking.customer_phone) {
+      sendSMS(booking.customer_phone,
+        'Trollhättan Cab: Din förare ' + booking.driver_name + ' är på väg! Bokning ' + booking.booking_ref + '. Skylt: ' + (booking.driver_plate||'')
+      );
+    }
+    res.json({ success: true, booking });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
