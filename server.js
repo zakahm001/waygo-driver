@@ -504,14 +504,14 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
 
 app.post('/drivers/add', adminMiddleware, async (req, res) => {
   try {
-    const { name, email, phone, plate, taxi_nr, city, password } = req.body;
-    if (!name || !email || !phone || !plate || !password) return res.status(400).json({ error: 'Obligatoriska fält saknas' });
+    const { name, email, phone, plate, taxi_nr, city, password, taxi_license } = req.body;
+    if (!name || !email || !phone || !plate) return res.status(400).json({ error: 'Obligatoriska fält saknas' });
     const existing = await pool.query('SELECT id FROM drivers WHERE email=$1 OR plate=$2', [email, plate]);
     if (existing.rows.length > 0) return res.status(400).json({ error: 'E-post eller skylt används redan' });
-    const hash = await bcrypt.hash(password, 10);
+    const hash = await bcrypt.hash(password || 'thtcab123', 10);
     const r = await pool.query(
-      'INSERT INTO drivers (name, email, phone, plate, taxi_nr, city, password_hash, status, rating, trips_today, earnings_today) VALUES ($1,$2,$3,$4,$5,$6,$7,\'offline\',5.0,0,0) RETURNING *',
-      [name, email, phone, plate, taxi_nr||null, city||null, hash]
+      "INSERT INTO drivers (name, email, phone, plate, taxi_nr, city, password_hash, taxi_license, status, rating, trips_today, earnings_today) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'offline',5.0,0,0) RETURNING *",
+      [name, email, phone, plate, taxi_nr||null, city||null, hash, taxi_license||null]
     );
     const d = r.rows[0]; delete d.password_hash;
     res.json({ driver: d });
@@ -520,22 +520,57 @@ app.post('/drivers/add', adminMiddleware, async (req, res) => {
 
 app.post('/drivers/login', async (req, res) => {
   try {
-    const { email, password } = req.body;
-    if (!email || !password) return res.status(400).json({ error: 'E-post och lösenord krävs' });
-    const r = await pool.query('SELECT * FROM drivers WHERE email=$1', [email]);
-    if (!r.rows.length) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
-    const driver = r.rows[0];
-    if (driver.blocked) return res.status(403).json({ error: 'Ditt konto är blockerat. Kontakta central.' });
-    if (driver.suspended_until && new Date(driver.suspended_until) > new Date()) {
-      return res.status(403).json({ error: 'Ditt konto är avstängt till ' + new Date(driver.suspended_until).toLocaleDateString('sv-SE') });
+    const { email, password, taxi_license, pin } = req.body;
+    let driver;
+    // Support both login methods
+    if (taxi_license) {
+      // New method: license + pin
+      const r = await pool.query('SELECT * FROM drivers WHERE taxi_license=$1', [taxi_license]);
+      if (!r.rows.length) return res.status(401).json({ error: 'Taxiförarlegitimation hittades inte' });
+      driver = r.rows[0];
+      if (driver.blocked) return res.status(403).json({ error: 'Ditt konto är blockerat. Kontakta central.' });
+      if (driver.suspended_until && new Date(driver.suspended_until) > new Date()) {
+        return res.status(403).json({ error: 'Ditt konto är avstängt till ' + new Date(driver.suspended_until).toLocaleDateString('sv-SE') });
+      }
+      // Check pin — use pin_hash if set, otherwise last 4 digits of license
+      let validPin = false;
+      if (driver.pin_hash) {
+        validPin = await bcrypt.compare(pin, driver.pin_hash);
+      } else {
+        // Default PIN = last 4 digits of license
+        const defaultPin = taxi_license.slice(-4);
+        validPin = pin === defaultPin;
+      }
+      if (!validPin) return res.status(401).json({ error: 'Fel PIN-kod' });
+    } else if (email && password) {
+      // Legacy method: email + password
+      const r = await pool.query('SELECT * FROM drivers WHERE email=$1', [email]);
+      if (!r.rows.length) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+      driver = r.rows[0];
+      if (driver.blocked) return res.status(403).json({ error: 'Ditt konto är blockerat. Kontakta central.' });
+      if (driver.suspended_until && new Date(driver.suspended_until) > new Date()) {
+        return res.status(403).json({ error: 'Ditt konto är avstängt till ' + new Date(driver.suspended_until).toLocaleDateString('sv-SE') });
+      }
+      if (!driver.password_hash) return res.status(401).json({ error: 'Inget lösenord satt' });
+      const valid = await bcrypt.compare(password, driver.password_hash);
+      if (!valid) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    } else {
+      return res.status(400).json({ error: 'Ange legitimationsnummer + PIN eller e-post + lösenord' });
     }
-    if (!driver.password_hash) return res.status(401).json({ error: 'Inget lösenord satt' });
-    const valid = await bcrypt.compare(password, driver.password_hash);
-    if (!valid) return res.status(401).json({ error: 'Fel e-post eller lösenord' });
+    // Get company info
+    let companyName = null, akeriNumber = null;
+    if (driver.company_id) {
+      const comp = await pool.query('SELECT name, akeri_number FROM companies WHERE id=$1', [driver.company_id]);
+      if (comp.rows.length) {
+        companyName = comp.rows[0].name;
+        akeriNumber = comp.rows[0].akeri_number;
+      }
+    }
     await pool.query('UPDATE drivers SET last_active=NOW() WHERE id=$1', [driver.id]);
     const token = jwt.sign({ id: driver.id, email: driver.email, name: driver.name }, JWT_SECRET, { expiresIn: '30d' });
     delete driver.password_hash;
-    res.json({ driver, token });
+    delete driver.pin_hash;
+    res.json({ driver: { ...driver, company_name: companyName, akeri_number: akeriNumber }, token });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -823,10 +858,11 @@ app.get('/companies', staffMiddleware, async (req, res) => {
 app.post('/companies/add', adminMiddleware, async (req, res) => {
   try {
     const { name, org_number, contact_email, contact_phone, agreement_date, notes } = req.body;
+    const { akeri_number } = req.body;
     if (!name || !org_number) return res.status(400).json({ error: 'Namn och org.nr krävs' });
     const r = await pool.query(
-      'INSERT INTO companies (name, org_number, contact_email, contact_phone, agreement_date, notes, status) VALUES ($1,$2,$3,$4,$5,$6,$7) RETURNING *',
-      [name, org_number, contact_email||null, contact_phone||null, agreement_date||null, notes||null, 'active']
+      'INSERT INTO companies (name, org_number, contact_email, contact_phone, agreement_date, notes, status, akeri_number) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) RETURNING *',
+      [name, org_number, contact_email||null, contact_phone||null, agreement_date||null, notes||null, 'active', akeri_number||null]
     );
     res.json({ company: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
