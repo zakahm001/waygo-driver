@@ -20,6 +20,9 @@ const jwt = require('jsonwebtoken');
 
 const app = express();
 const server = http.createServer(app);
+// Track pending dispatches so driver gets them on reconnect
+const pendingDispatches = new Map(); // driverId -> {booking, expires}
+
 const io = new Server(server, {
   cors: { origin: '*', methods: ['GET','POST','PATCH','DELETE'] }
 });
@@ -285,11 +288,20 @@ async function tryNextDriver(booking, drivers, index) {
     status: 'trying'
   });
 
-  // Send booking to this driver
-  io.emit('booking:assigned:driver', Object.assign({}, booking, {
+  // Store pending dispatch so driver gets it on reconnect
+  const dispatchPayload = Object.assign({}, booking, {
     driver_id: driver.id,
     _dispatch_attempt: true
-  }));
+  });
+  pendingDispatches.set(driver.id, {
+    booking: dispatchPayload,
+    expires: Date.now() + 35000
+  });
+
+  // Send to driver room AND broadcast with driver_id set
+  io.to('driver-' + driver.id).emit('booking:assigned:driver', dispatchPayload);
+  // Also broadcast as fallback
+  io.emit('booking:assigned:driver', dispatchPayload);
 
   // Wait 32 seconds for response (30s countdown + 2s buffer)
   await new Promise(resolve => setTimeout(resolve, 32000));
@@ -329,6 +341,8 @@ async function tryNextDriver(booking, drivers, index) {
 app.patch('/bookings/:id/accept', async (req, res) => {
   try {
     const { driver_id } = req.body;
+    // Clear pending dispatch
+    pendingDispatches.delete(parseInt(driver_id));
     const { id } = req.params;
     // Check booking is still pending
     const check = await pool.query("SELECT status FROM bookings WHERE id=$1", [id]);
@@ -713,7 +727,18 @@ app.post('/test-gps', (req, res) => {
 io.on('connection', (socket) => {
   console.log('Connected: ' + socket.id);
   socket.on('central:join', () => { socket.join('central'); console.log('Central joined'); });
-  socket.on('driver:join', (driverId) => { socket.join('driver-' + driverId); console.log('Driver joined: driver-' + driverId); });
+  socket.on('driver:join', (driverId) => {
+    socket.join('driver-' + driverId);
+    console.log('Driver joined: driver-' + driverId);
+    // Check if there is a pending dispatch for this driver
+    const pending = pendingDispatches.get(parseInt(driverId));
+    if (pending && pending.expires > Date.now()) {
+      console.log('Resending pending dispatch to driver', driverId);
+      setTimeout(() => {
+        socket.emit('booking:assigned:driver', pending.booking);
+      }, 500);
+    }
+  });
   socket.on('customer:join', (bookingId) => { socket.join('booking-' + bookingId); });
   socket.on('driver:location', async (data) => {
     const { driverId, lat, lng } = data;
