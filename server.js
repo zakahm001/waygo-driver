@@ -930,7 +930,238 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
+// ── CARS ROUTES ──
+
+app.get('/cars', async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT c.*, co.name as company_name, co.akeri_number,
+        d.name as current_driver_name, d.taxi_license as current_driver_license
+      FROM cars c
+      LEFT JOIN companies co ON c.company_id = co.id
+      LEFT JOIN drivers d ON c.current_driver_id = d.id
+      ORDER BY c.created_at DESC
+    `);
+    res.json({ cars: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.get('/cars/company/:companyId', async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT c.*, d.name as current_driver_name
+      FROM cars c
+      LEFT JOIN drivers d ON c.current_driver_id = d.id
+      WHERE c.company_id = $1
+      ORDER BY c.plate
+    `, [req.params.companyId]);
+    res.json({ cars: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.post('/cars/add', adminMiddleware, async (req, res) => {
+  try {
+    const { plate, model, year, color, taxi_nr, company_id } = req.body;
+    if (!plate) return res.status(400).json({ error: 'Registreringsskylt krävs' });
+    const r = await pool.query(
+      'INSERT INTO cars (plate, model, year, color, taxi_nr, company_id) VALUES ($1,$2,$3,$4,$5,$6) RETURNING *',
+      [plate.toUpperCase(), model||null, year||null, color||null, taxi_nr||null, company_id||null]
+    );
+    res.json({ car: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.patch('/cars/:id', adminMiddleware, async (req, res) => {
+  try {
+    const { plate, model, year, color, taxi_nr, company_id } = req.body;
+    const r = await pool.query(
+      'UPDATE cars SET plate=COALESCE($1,plate), model=$2, year=$3, color=$4, taxi_nr=$5, company_id=$6 WHERE id=$7 RETURNING *',
+      [plate, model, year, color, taxi_nr, company_id, req.params.id]
+    );
+    res.json({ car: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+app.delete('/cars/:id', adminMiddleware, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM driver_cars WHERE car_id=$1', [req.params.id]);
+    await pool.query('DELETE FROM cars WHERE id=$1', [req.params.id]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Assign driver to car (authorize)
+app.post('/cars/:id/assign-driver', adminMiddleware, async (req, res) => {
+  try {
+    const { driver_id } = req.body;
+    await pool.query(
+      'INSERT INTO driver_cars (driver_id, car_id) VALUES ($1,$2) ON CONFLICT DO NOTHING',
+      [driver_id, req.params.id]
+    );
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Remove driver from car
+app.delete('/cars/:id/driver/:driverId', adminMiddleware, async (req, res) => {
+  try {
+    await pool.query('DELETE FROM driver_cars WHERE car_id=$1 AND driver_id=$2', [req.params.id, req.params.driverId]);
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Driver selects car for current session
+app.post('/cars/:id/select', async (req, res) => {
+  try {
+    const { driver_id } = req.body;
+    const carId = req.params.id;
+    // Verify driver is authorized for this car
+    const auth = await pool.query('SELECT 1 FROM driver_cars WHERE driver_id=$1 AND car_id=$2', [driver_id, carId]);
+    if (!auth.rows.length) return res.status(403).json({ error: 'Föraren är inte behörig för detta fordon' });
+    // Release car from any other driver
+    await pool.query("UPDATE cars SET current_driver_id=NULL, status='offline' WHERE current_driver_id=$1", [driver_id]);
+    // Assign to this car
+    await pool.query("UPDATE cars SET current_driver_id=$1, status='available', last_active=NOW() WHERE id=$2", [driver_id, carId]);
+    // Update driver with car plate
+    const car = await pool.query('SELECT * FROM cars WHERE id=$1', [carId]);
+    io.emit('car:status', { carId: parseInt(carId), status: 'available', driverId: driver_id });
+    res.json({ success: true, car: car.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Get cars available for a driver
+app.get('/drivers/:id/cars', async (req, res) => {
+  try {
+    const r = await pool.query(`
+      SELECT c.*, co.name as company_name
+      FROM cars c
+      JOIN driver_cars dc ON c.id = dc.car_id
+      LEFT JOIN companies co ON c.company_id = co.id
+      WHERE dc.driver_id = $1
+      ORDER BY c.plate
+    `, [req.params.id]);
+    res.json({ cars: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// Update car GPS location
+app.post('/cars/:id/location', async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    await pool.query('UPDATE cars SET lat=$1, lng=$2, last_active=NOW() WHERE id=$3', [lat, lng, req.params.id]);
+    io.emit('car:location', { carId: parseInt(req.params.id), lat, lng });
+    res.json({ success: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+// ── DRIVER LOCATION UPDATE ──
+app.patch('/drivers/:id/location', async (req, res) => {
+  try {
+    const { lat, lng } = req.body;
+    if (!lat || !lng) return res.status(400).json({ error: 'lat and lng required' });
+    await pool.query('UPDATE drivers SET lat=$1, lng=$2 WHERE id=$3', [lat, lng, req.params.id]);
+    io.emit('driver:location', { driver_id: parseInt(req.params.id), lat, lng });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── CREATE / UPDATE AKERI PORTAL ACCESS ──
+app.post('/staff/create-portal-access', adminMiddleware, async (req, res) => {
+  try {
+    const { email, password, company_id, company_name } = req.body;
+    if (!email || !password || !company_id) return res.status(400).json({ error: 'Missing fields' });
+    const hash = await bcrypt.hash(password, 10);
+    const r = await pool.query(
+      `INSERT INTO staff (name, email, password_hash, role, level, company_id)
+       VALUES ($1,$2,$3,'akeri',4,$4)
+       ON CONFLICT (email) DO UPDATE
+       SET password_hash=$3, company_id=$4, role='akeri', level=4, name=$1
+       RETURNING id, name, email, role, level, company_id`,
+      [company_name + ' (Akeri)', email, hash, company_id]
+    );
+    await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS portal_email VARCHAR(200)');
+    await pool.query('UPDATE companies SET portal_email=$1 WHERE id=$2', [email, company_id]);
+    res.json({ success: true, staff: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ADJUST BOOKING PAYMENT ──
+app.patch('/bookings/:id/adjust-payment', adminMiddleware, async (req, res) => {
+  try {
+    const { type, adjusted_fare, reason, extra_charge, extra_description, refund_amount, refund_reason } = req.body;
+    const addCols = [
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS adjusted_fare INTEGER',
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_charge INTEGER DEFAULT 0',
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_amount INTEGER DEFAULT 0',
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS correction_reason TEXT',
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_reason TEXT',
+      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_description TEXT',
+    ];
+    for (const q of addCols) { try { await pool.query(q); } catch(e){} }
+
+    let query, params;
+    if (type === 'correction') {
+      query = 'UPDATE bookings SET adjusted_fare=$1, correction_reason=$2 WHERE id=$3 RETURNING *';
+      params = [adjusted_fare, reason, req.params.id];
+    } else if (type === 'extra') {
+      query = 'UPDATE bookings SET extra_charge=COALESCE(extra_charge,0)+$1, extra_description=$2, adjusted_fare=COALESCE(adjusted_fare,fare_sek,0)+$1 WHERE id=$3 RETURNING *';
+      params = [extra_charge, extra_description, req.params.id];
+    } else if (type === 'refund') {
+      query = "UPDATE bookings SET refund_amount=$1, refund_reason=$2, payment_status='refunded' WHERE id=$3 RETURNING *";
+      params = [refund_amount, refund_reason, req.params.id];
+    } else {
+      return res.status(400).json({ error: 'Invalid type' });
+    }
+    const r = await pool.query(query, params);
+    res.json({ success: true, booking: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── GET COMPANY BY ID ──
+app.get('/companies/:id', staffMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query('SELECT * FROM companies WHERE id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    res.json({ company: r.rows[0] });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ECONOMY SUMMARY ──
+app.get('/economy/summary', staffMiddleware, async (req, res) => {
+  try {
+    const today = new Date().toISOString().split('T')[0];
+    const weekAgo = new Date(Date.now()-7*24*60*60*1000).toISOString().split('T')[0];
+    const monthAgo = new Date(Date.now()-30*24*60*60*1000).toISOString().split('T')[0];
+    const [tR,wR,mR,dR] = await Promise.all([
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND created_at::date=$1",[today]),
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND created_at::date>=$1",[weekAgo]),
+      pool.query("SELECT COUNT(*) as bookings, COALESCE(SUM(fare_sek),0) as revenue FROM bookings WHERE status='completed' AND created_at::date>=$1",[monthAgo]),
+      pool.query("SELECT d.id,d.name,d.plate,d.taxi_nr,d.is_owner,d.owner_share,COUNT(b.id) as trips,COALESCE(SUM(b.fare_sek),0) as earnings FROM drivers d LEFT JOIN bookings b ON b.driver_id=d.id AND b.status='completed' AND b.created_at::date>=$1 GROUP BY d.id ORDER BY earnings DESC",[monthAgo])
+    ]);
+    res.json({ today:tR.rows[0], week:wR.rows[0], month:mR.rows[0], drivers:dR.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ECONOMY BOOKINGS ──
+app.get('/economy/bookings', staffMiddleware, async (req, res) => {
+  try {
+    const { from, to, status, limit=200 } = req.query;
+    let where=[], params=[];
+    if (from) { params.push(from); where.push('b.created_at::date>=$'+params.length); }
+    if (to)   { params.push(to);   where.push('b.created_at::date<=$'+params.length); }
+    if (status){ params.push(status); where.push('b.status=$'+params.length); }
+    params.push(parseInt(limit));
+    const r = await pool.query(
+      'SELECT b.*,d.name as driver_name,c.name as customer_name,c.phone as customer_phone FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id LEFT JOIN customers c ON b.customer_id=c.id '+(where.length?'WHERE '+where.join(' AND '):'')+' ORDER BY b.created_at DESC LIMIT $'+params.length,
+      params
+    );
+    res.json({ bookings: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 server.listen(PORT, () => {
-  console.log('Trollhättan Cab API v5.4 on port ' + PORT);
+  console.log('Trollhattan Cab API v5.5 on port ' + PORT);
   console.log('Socket.io ready');
 });
