@@ -1330,9 +1330,12 @@ async function ensureColumns() {
   }
   console.log('✅ Database columns verified');
 }
-ensureColumns();
+// Wait for columns before accepting requests
+ensureColumns().then(() => {
 
 server.listen(PORT, () => {
   console.log('Trollhattan Cab API v5.5 on port ' + PORT);
   console.log('Socket.io ready');
 });
+
+}); // end ensureColumns().then
