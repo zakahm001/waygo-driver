@@ -1264,14 +1264,26 @@ app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
       io.emit('driver:status', { driverId: oldDriverId, status: 'available' });
     }
 
-    // Remove from pending dispatches
+    // Clear ALL pending dispatches for this booking from ALL drivers
+    pendingDispatches.forEach(function(val, driverId) {
+      if (val.booking && val.booking.id === parseInt(bookingId)) {
+        pendingDispatches.delete(driverId);
+        // Notify each driver their pending was cleared
+        if (driverId !== new_driver_id) {
+          io.to('driver-' + driverId).emit('booking:cancelled', {
+            booking_id: parseInt(bookingId),
+            message: 'Bokningen har tilldelats en annan förare'
+          });
+        }
+      }
+    });
     pendingDispatches.delete(new_driver_id);
     pendingDispatches.delete(oldDriverId);
 
     // Send full dispatch popup to new driver
     const payload = Object.assign({}, booking, {
+      id: parseInt(bookingId),
       driver_id: new_driver_id,
-      driver_name: newDriver.name,
       status: 'assigned',
       _reassigned: true,
       _auto: true
