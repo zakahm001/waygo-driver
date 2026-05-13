@@ -1056,6 +1056,17 @@ app.post('/cars/:id/location', async (req, res) => {
 });
 
 
+
+// ── DRIVER LOGOUT / SET OFFLINE ──
+app.patch('/drivers/:id/go-offline', authMiddleware, async (req, res) => {
+  try {
+    const id = req.params.id;
+    await pool.query("UPDATE drivers SET status='offline' WHERE id=$1", [id]);
+    io.emit('driver:status', { driverId: parseInt(id), status: 'offline' });
+    res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── DRIVER LOCATION UPDATE ──
 app.patch('/drivers/:id/location', async (req, res) => {
   try {
