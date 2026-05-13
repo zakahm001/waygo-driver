@@ -1228,7 +1228,7 @@ app.post('/staff/create-portal-access', adminMiddleware, async (req, res) => {
        RETURNING id, name, email, role, level, company_id`,
       [company_name + ' (Akeri)', email, hash, company_id]
     );
-    await pool.query('ALTER TABLE companies ADD COLUMN IF NOT EXISTS portal_email VARCHAR(200)');
+    // portal_email column ensured on startup
     await pool.query('UPDATE companies SET portal_email=$1 WHERE id=$2', [email, company_id]);
     res.json({ success: true, staff: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1238,15 +1238,7 @@ app.post('/staff/create-portal-access', adminMiddleware, async (req, res) => {
 app.patch('/bookings/:id/adjust-payment', adminMiddleware, async (req, res) => {
   try {
     const { type, adjusted_fare, reason, extra_charge, extra_description, refund_amount, refund_reason } = req.body;
-    const addCols = [
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS adjusted_fare INTEGER',
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_charge INTEGER DEFAULT 0',
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_amount INTEGER DEFAULT 0',
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS correction_reason TEXT',
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_reason TEXT',
-      'ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_description TEXT',
-    ];
-    for (const q of addCols) { try { await pool.query(q); } catch(e){} }
+    // columns ensured on startup
 
     let query, params;
     if (type === 'correction') {
@@ -1308,15 +1300,37 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
-// Create promo_subscriptions table if not exists
-pool.query(`CREATE TABLE IF NOT EXISTS promo_subscriptions (
-  id SERIAL PRIMARY KEY,
-  email VARCHAR(200) UNIQUE NOT NULL,
-  phone VARCHAR(50),
-  name VARCHAR(200),
-  source VARCHAR(50) DEFAULT 'guest_booking',
-  created_at TIMESTAMP DEFAULT NOW()
-)`).catch(e => console.log('promo table:', e.message));
+// ── ADD MISSING COLUMNS ON STARTUP ──
+async function ensureColumns() {
+  const cols = [
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT false",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guest_promo_accepted BOOLEAN DEFAULT false",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS trip_phase VARCHAR(20) DEFAULT 'driving'",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS arrived_at TIMESTAMP",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_in_at TIMESTAMP",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS adjusted_fare INTEGER",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_charge INTEGER DEFAULT 0",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_amount INTEGER DEFAULT 0",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS correction_reason TEXT",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS refund_reason TEXT",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS extra_description TEXT",
+    "ALTER TABLE companies ADD COLUMN IF NOT EXISTS portal_email VARCHAR(200)",
+    `CREATE TABLE IF NOT EXISTS promo_subscriptions (
+      id SERIAL PRIMARY KEY,
+      email VARCHAR(200) UNIQUE NOT NULL,
+      phone VARCHAR(50),
+      name VARCHAR(200),
+      source VARCHAR(50) DEFAULT 'guest_booking',
+      created_at TIMESTAMP DEFAULT NOW()
+    )`,
+  ];
+  for (const q of cols) {
+    try { await pool.query(q); } catch(e) { console.log('Column setup:', e.message); }
+  }
+  console.log('✅ Database columns verified');
+}
+ensureColumns();
 
 server.listen(PORT, () => {
   console.log('Trollhattan Cab API v5.5 on port ' + PORT);
