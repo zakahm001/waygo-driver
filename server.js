@@ -61,7 +61,7 @@ const io = new Server(server, {
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
 const STAFF_SECRET = 'waygo-staff-2025';
-const ELKS_USER = 'u7a7b323b5af0436c7dbfd1140e7c0221';
+const ELKS_USER = 'u3ba27fdac153c8b57a410277ad71f601';
 const ELKS_PWD = 'C44F26D562BB300E2CAB4AE20BF5DDFD';
 const ELKS_FROM = 'THTCab';
 
@@ -355,9 +355,14 @@ async function notifyAvailableDrivers(booking) {
     // After 120 seconds if still pending — alert Central
     setTimeout(async () => {
       try {
+        // Special alert for 2-car bookings
+        const isCarTwo = booking.booking_ref && booking.booking_ref.includes('-B');
+        const needs2Cars = (booking.passengers || 1) >= 5;
         const check = await pool.query("SELECT status FROM bookings WHERE id=$1", [booking.id]);
         if (check.rows[0] && check.rows[0].status === 'pending') {
-          io.emit('dispatch:failed', { booking_id: booking.id, booking_ref: booking.booking_ref, reason: 'Ingen förare accepterade — tilldela manuellt' });
+          io.emit('dispatch:failed', {
+              needs_manual: true,
+              is_two_car: (booking.passengers||1) >= 5, booking_id: booking.id, booking_ref: booking.booking_ref, reason: 'Ingen förare accepterade — tilldela manuellt' });
         }
       } catch(e) {}
     }, 120000);
@@ -798,6 +803,7 @@ app.post('/messages', async (req, res) => {
       [thread_key, sender_name, sender_role, content]
     );
     io.emit('message:new:' + r.rows[0].thread_key, r.rows[0]);
+    io.emit('message:new', Object.assign({}, r.rows[0]));
     res.json({ message: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1200,6 +1206,71 @@ app.post('/bookings/:id/customer-in', async (req, res) => {
     ).catch(() => {});
     io.emit('booking:customer_in', { booking_id: parseInt(req.params.id) });
     res.json({ ok: true });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+// ── REASSIGN BOOKING ──
+app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
+  try {
+    const { new_driver_id } = req.body;
+    const bookingId = req.params.id;
+
+    // Get current booking
+    const bRes = await pool.query('SELECT * FROM bookings WHERE id=$1', [bookingId]);
+    if (!bRes.rows.length) return res.status(404).json({ error: 'Booking not found' });
+    const booking = bRes.rows[0];
+    const oldDriverId = booking.driver_id;
+
+    // Get new driver info
+    const dRes = await pool.query('SELECT * FROM drivers WHERE id=$1', [new_driver_id]);
+    if (!dRes.rows.length) return res.status(404).json({ error: 'Driver not found' });
+    const newDriver = dRes.rows[0];
+
+    // Update booking
+    await pool.query(
+      'UPDATE bookings SET driver_id=$1, driver_name=$2, status=$3 WHERE id=$4',
+      [new_driver_id, newDriver.name, 'assigned', bookingId]
+    );
+
+    // Update driver statuses
+    await pool.query("UPDATE drivers SET status='busy' WHERE id=$1", [new_driver_id]);
+    if (oldDriverId) {
+      await pool.query("UPDATE drivers SET status='available' WHERE id=$1", [oldDriverId]);
+      // Notify old driver
+      io.to('driver-' + oldDriverId).emit('booking:cancelled', {
+        booking_id: parseInt(bookingId),
+        message: 'Bokningen har tilldelats en annan förare'
+      });
+      io.emit('driver:status', { driverId: oldDriverId, status: 'available' });
+    }
+
+    // Remove from pending dispatches
+    pendingDispatches.delete(new_driver_id);
+    pendingDispatches.delete(oldDriverId);
+
+    // Send full dispatch popup to new driver
+    const payload = Object.assign({}, booking, {
+      driver_id: new_driver_id,
+      driver_name: newDriver.name,
+      status: 'assigned',
+      _reassigned: true,
+      _auto: true
+    });
+    pendingDispatches.set(new_driver_id, { booking: payload, expires: Date.now() + 120000 });
+    io.to('driver-' + new_driver_id).emit('booking:assigned:driver', payload);
+    io.emit('driver:status', { driverId: new_driver_id, status: 'busy' });
+
+    // Notify central
+    io.emit('dispatch:status', {
+      booking_id: parseInt(bookingId),
+      booking_ref: booking.booking_ref,
+      message: '🔄 Omtilldelad till ' + newDriver.name,
+      status: 'reassigned'
+    });
+
+    const updated = await pool.query('SELECT * FROM bookings WHERE id=$1', [bookingId]);
+    res.json({ ok: true, booking: updated.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
