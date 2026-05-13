@@ -930,6 +930,21 @@ io.on('connection', (socket) => {
     io.to('central').emit('driver:location', { driverId, lat, lng });
     io.emit('driver:location:' + driverId, { driverId, lat, lng });
   });
+
+  // ── CENTRAL QUESTION → DRIVER ──
+  socket.on('central:question', function(data) {
+    if (data.driver_id) {
+      io.to('driver-' + data.driver_id).emit('central:question', data);
+    } else {
+      io.emit('central:question', data);
+    }
+  });
+
+  // ── DRIVER RESPONSE → CENTRAL ──
+  socket.on('driver:question_response', function(data) {
+    io.emit('driver:question_response', data);
+  });
+
   socket.on('driver:status', async (data) => {
     const { driverId, status } = data;
     try {
