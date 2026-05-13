@@ -61,9 +61,9 @@ const io = new Server(server, {
 const PORT = 3000;
 const JWT_SECRET = 'waygo-secret-2025';
 const STAFF_SECRET = 'waygo-staff-2025';
-const ELKS_USER = 'u3ba27fdac153c8b57a410277ad71f601';
-const ELKS_PWD = 'C44F26D562BB300E2CAB4AE20BF5DDFD';
-const ELKS_FROM = 'THTCab';
+const ELKS_USER = process.env.ELKS_USER || 'u3ba27fdac153c8b57a410277ad71f601';
+const ELKS_PWD = process.env.ELKS_PWD || 'C44F26D562BB300E2CAB4AE20BF5DDFD';
+const ELKS_FROM = process.env.ELKS_FROM || 'THTCab';
 
 app.use(cors({ origin: '*' }));
 app.use(express.json());
@@ -1258,6 +1258,7 @@ app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
       await pool.query("UPDATE drivers SET status='available' WHERE id=$1", [oldDriverId]);
       // Notify old driver
       io.to('driver-' + oldDriverId).emit('booking:cancelled', {
+        id: parseInt(bookingId),
         booking_id: parseInt(bookingId),
         message: 'Bokningen har tilldelats en annan förare'
       });
@@ -1271,6 +1272,7 @@ app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
         // Notify each driver their pending was cleared
         if (driverId !== new_driver_id) {
           io.to('driver-' + driverId).emit('booking:cancelled', {
+            id: parseInt(bookingId),
             booking_id: parseInt(bookingId),
             message: 'Bokningen har tilldelats en annan förare'
           });
