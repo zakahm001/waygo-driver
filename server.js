@@ -416,6 +416,8 @@ app.patch('/bookings/:id/accept', async (req, res) => {
     // Assign to driver
     await pool.query("UPDATE bookings SET driver_id=$1, status='assigned', assigned_at=NOW() WHERE id=$2", [driverId, id]);
     await pool.query("UPDATE drivers SET status='busy', last_active=NOW() WHERE id=$1", [driverId]);
+    // Mirror to car
+    await pool.query("UPDATE cars SET status='busy' WHERE current_driver_id=$1", [driverId]);
     const r = await pool.query(
       'SELECT b.*, d.name as driver_name, d.plate as driver_plate FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
     );
@@ -523,6 +525,8 @@ app.patch('/bookings/:id/complete', async (req, res) => {
         'UPDATE drivers SET status=\'available\', trips_today=trips_today+1, earnings_today=earnings_today+$1, last_active=NOW() WHERE id=$2',
         [fare || 0, driver_id]
       );
+      // Mirror car status
+      await pool.query("UPDATE cars SET status='available' WHERE current_driver_id=$1", [driver_id]);
     }
     const r = await pool.query(
       'SELECT b.*, d.name as driver_name FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [id]
@@ -538,7 +542,8 @@ app.patch('/bookings/:id/cancel', async (req, res) => {
     const b = await pool.query('SELECT * FROM bookings WHERE id=$1', [id]);
     if (b.rows[0]?.driver_id) {
       await pool.query('UPDATE drivers SET status=$1 WHERE id=$2', ['available', b.rows[0].driver_id]);
-      io.to('driver-' + b.rows[0].driver_id).emit('booking:cancelled', { id: parseInt(id) });
+      await pool.query("UPDATE cars SET status='available' WHERE current_driver_id=$1", [b.rows[0].driver_id]);
+      io.to('driver-' + b.rows[0].driver_id).emit('booking:cancelled', { id: parseInt(id), booking_id: parseInt(id) });
     }
     await pool.query('UPDATE bookings SET status=\'cancelled\', driver_id=NULL WHERE id=$1', [id]);
     io.emit('booking:cancelled', { id: parseInt(id) });
@@ -603,7 +608,13 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
     const { id } = req.params;
     const { action, reason, suspend_until, is_owner, owner_share, name, phone, plate, taxi_nr, city, password } = req.body;
     if (action === 'block') {
-      await pool.query('UPDATE drivers SET blocked=true WHERE id=$1', [id]);
+      await pool.query('UPDATE drivers SET blocked=true, status=\'offline\' WHERE id=$1', [id]);
+      // Release their car — make it available for other drivers
+      await pool.query("UPDATE cars SET status='offline', current_driver_id=NULL, current_driver_name=NULL WHERE current_driver_id=$1", [id]);
+      await pool.query('UPDATE drivers SET current_car_id=NULL WHERE id=$1', [id]);
+      // Kick driver out of app
+      io.to('driver-' + id).emit('driver:blocked', { reason: 'Din åtkomst har spärrats av administratören.' });
+      io.emit('driver:status', { driverId: parseInt(id), status: 'offline' });
     } else if (action === 'unblock') {
       await pool.query('UPDATE drivers SET blocked=false, suspended_until=NULL, suspend_reason=NULL WHERE id=$1', [id]);
       io.to('driver-' + id).emit('driver:unblocked', {});
@@ -618,6 +629,20 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
       io.emit('driver:status', { driverId: parseInt(id), status: 'available' });
     } else if (action === 'remove_owner') {
       await pool.query('UPDATE drivers SET is_owner=false, owner_share=0 WHERE id=$1', [id]);
+    } else if (action === 'status') {
+      const newStatus = req.body.status || 'offline';
+      await pool.query('UPDATE drivers SET status=$1 WHERE id=$2', [newStatus, id]);
+      // Mirror status to car
+      const carMirror = {
+        'available': 'available',
+        'busy': 'busy',
+        'paused': 'paused',
+        'offline': 'offline'
+      };
+      const carStatus = carMirror[newStatus] || 'offline';
+      await pool.query('UPDATE cars SET status=$1 WHERE current_driver_id=$2', [carStatus, id]);
+      io.emit('driver:status', { driverId: parseInt(id), status: newStatus });
+      io.emit('car:status', { driverId: parseInt(id), status: carStatus });
     } else if (action === 'update') {
       if (password) {
         const hash = await bcrypt.hash(password, 10);
@@ -1172,32 +1197,91 @@ app.post('/cars/:id/select', async (req, res) => {
   try {
     const { driver_id } = req.body;
     const carId = req.params.id;
-    // Verify driver is authorized for this car
-    const auth = await pool.query('SELECT 1 FROM driver_cars WHERE driver_id=$1 AND car_id=$2', [driver_id, carId]);
-    if (!auth.rows.length) return res.status(403).json({ error: 'Föraren är inte behörig för detta fordon' });
-    // Release car from any other driver
+
+    // Get driver and car info
+    const [driverRes, carRes] = await Promise.all([
+      pool.query('SELECT * FROM drivers WHERE id=$1', [driver_id]),
+      pool.query('SELECT * FROM cars WHERE id=$1', [carId])
+    ]);
+    if (!driverRes.rows.length) return res.status(404).json({ error: 'Förare ej hittad' });
+    if (!carRes.rows.length) return res.status(404).json({ error: 'Fordon ej hittat' });
+    const driverData = driverRes.rows[0];
+    const carData = carRes.rows[0];
+
+    // Check authorization: either specifically assigned OR same company
+    const specificAuth = await pool.query('SELECT 1 FROM driver_cars WHERE driver_id=$1 AND car_id=$2', [driver_id, carId]);
+    const sameCompany = driverData.company_id && carData.company_id && driverData.company_id === carData.company_id;
+    if (!specificAuth.rows.length && !sameCompany) {
+      return res.status(403).json({ error: 'Föraren är inte behörig för detta fordon' });
+    }
+
+    // Track current_car_id on driver
+    await pool.query('ALTER TABLE drivers ADD COLUMN IF NOT EXISTS current_car_id INTEGER').catch(()=>{});
+
+    // Release this driver's previous car
     await pool.query("UPDATE cars SET current_driver_id=NULL, status='offline' WHERE current_driver_id=$1", [driver_id]);
-    // Assign to this car
+    await pool.query('UPDATE drivers SET current_car_id=NULL WHERE id=$1', [driver_id]);
+
+    // Check car not taken by another online driver
+    if (carData.current_driver_id && carData.current_driver_id !== parseInt(driver_id)) {
+      const otherDriver = await pool.query("SELECT status FROM drivers WHERE id=$1", [carData.current_driver_id]);
+      if (otherDriver.rows.length && otherDriver.rows[0].status !== 'offline') {
+        return res.status(409).json({ error: 'Fordonet används av en annan förare' });
+      }
+    }
+
+    // Assign car to this driver
     await pool.query("UPDATE cars SET current_driver_id=$1, status='available', last_active=NOW() WHERE id=$2", [driver_id, carId]);
-    // Update driver with car plate
-    const car = await pool.query('SELECT * FROM cars WHERE id=$1', [carId]);
-    io.emit('car:status', { carId: parseInt(carId), status: 'available', driverId: driver_id });
-    res.json({ success: true, car: car.rows[0] });
+    await pool.query('UPDATE drivers SET current_car_id=$1 WHERE id=$2', [carId, driver_id]);
+
+    const updatedCar = await pool.query('SELECT c.*, co.name as company_name FROM cars c LEFT JOIN companies co ON c.company_id=co.id WHERE c.id=$1', [carId]);
+    io.emit('car:status', { carId: parseInt(carId), status: 'available', driverId: parseInt(driver_id) });
+    res.json({ success: true, car: updatedCar.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // Get cars available for a driver
 app.get('/drivers/:id/cars', async (req, res) => {
   try {
-    const r = await pool.query(`
-      SELECT c.*, co.name as company_name
+    const driverRes = await pool.query('SELECT * FROM drivers WHERE id=$1', [req.params.id]);
+    if (!driverRes.rows.length) return res.json({ cars: [] });
+    const driver = driverRes.rows[0];
+    const companyId = driver.company_id;
+
+    let cars = [];
+
+    // First: cars specifically assigned to this driver via driver_cars
+    const specificRes = await pool.query(`
+      SELECT c.*, co.name as company_name, 'assigned' as access_type
       FROM cars c
       JOIN driver_cars dc ON c.id = dc.car_id
       LEFT JOIN companies co ON c.company_id = co.id
       WHERE dc.driver_id = $1
       ORDER BY c.plate
     `, [req.params.id]);
-    res.json({ cars: r.rows });
+
+    if (specificRes.rows.length) {
+      cars = specificRes.rows;
+    } else if (companyId) {
+      // Fallback: show all cars from driver's company (not currently in use by another driver)
+      const companyRes = await pool.query(`
+        SELECT c.*, co.name as company_name, 'company' as access_type
+        FROM cars c
+        LEFT JOIN companies co ON c.company_id = co.id
+        WHERE c.company_id = $1
+        AND (c.status = 'offline' OR c.status IS NULL
+          OR NOT EXISTS (
+            SELECT 1 FROM drivers d2
+            WHERE d2.current_car_id = c.id
+            AND d2.status != 'offline'
+            AND d2.id != $2
+          ))
+        ORDER BY c.plate
+      `, [companyId, req.params.id]).catch(() => ({ rows: [] }));
+      cars = companyRes.rows;
+    }
+
+    res.json({ cars });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1217,7 +1301,18 @@ app.post('/cars/:id/location', async (req, res) => {
 app.patch('/drivers/:id/go-offline', authMiddleware, async (req, res) => {
   try {
     const id = req.params.id;
-    await pool.query("UPDATE drivers SET status='offline' WHERE id=$1", [id]);
+    // Get driver's current car
+    const dRes = await pool.query('SELECT * FROM drivers WHERE id=$1', [id]);
+    const driver = dRes.rows[0];
+    // Set driver offline
+    await pool.query("UPDATE drivers SET status='offline', current_car_id=NULL WHERE id=$1", [id]);
+    // Set their car offline too
+    await pool.query("UPDATE cars SET status='offline', current_driver_id=NULL, current_driver_name=NULL WHERE current_driver_id=$1", [id]);
+    // If they had a car_id tracked
+    if (driver && driver.current_car_id) {
+      await pool.query("UPDATE cars SET status='offline', current_driver_id=NULL, current_driver_name=NULL WHERE id=$1", [driver.current_car_id]);
+      io.emit('car:status', { carId: driver.current_car_id, status: 'offline' });
+    }
     io.emit('driver:status', { driverId: parseInt(id), status: 'offline' });
     res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
@@ -1290,6 +1385,7 @@ app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
     await pool.query("UPDATE drivers SET status='busy' WHERE id=$1", [new_driver_id]);
     if (oldDriverId) {
       await pool.query("UPDATE drivers SET status='available' WHERE id=$1", [oldDriverId]);
+      await pool.query("UPDATE cars SET status='available' WHERE current_driver_id=$1", [oldDriverId]);
       // Notify old driver
       io.to('driver-' + oldDriverId).emit('booking:cancelled', {
         id: parseInt(bookingId),
