@@ -606,7 +606,7 @@ app.get('/drivers/:id', staffMiddleware, async (req, res) => {
 app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
   try {
     const { id } = req.params;
-    const { action, reason, suspend_until, is_owner, owner_share, name, phone, plate, taxi_nr, city, password } = req.body;
+    const { action, reason, suspend_until, is_owner, owner_share, name, phone, plate, taxi_nr, city, password, employment_type, company_id: companyId, status: statusAction, akeri_number } = req.body;
     if (action === 'block') {
       await pool.query('UPDATE drivers SET blocked=true, status=\'offline\' WHERE id=$1', [id]);
       // Release their car — make it available for other drivers
@@ -647,19 +647,35 @@ app.patch('/drivers/:id/manage', adminMiddleware, async (req, res) => {
       if (password) {
         const hash = await bcrypt.hash(password, 10);
         await pool.query(
-          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city), password_hash=$6 WHERE id=$7',
-          [name, phone, plate, taxi_nr, city, hash, id]
+          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city), password_hash=$6, employment_type=COALESCE($7,employment_type), company_id=COALESCE($8,company_id) WHERE id=$9',
+          [name, phone, plate, taxi_nr, city, hash, employment_type||null, companyId||null, id]
         );
       } else {
         await pool.query(
-          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city) WHERE id=$6',
-          [name, phone, plate, taxi_nr, city, id]
+          'UPDATE drivers SET name=COALESCE($1,name), phone=COALESCE($2,phone), plate=COALESCE($3,plate), taxi_nr=COALESCE($4,taxi_nr), city=COALESCE($5,city), employment_type=COALESCE($6,employment_type), company_id=COALESCE($7,company_id) WHERE id=$8',
+          [name, phone, plate, taxi_nr, city, employment_type||null, companyId||null, id]
         );
       }
     }
     const r = await pool.query('SELECT * FROM drivers WHERE id=$1', [id]);
     const d = r.rows[0]; delete d.password_hash;
     res.json({ driver: d });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+
+// ── DELETE DRIVER ──
+app.delete('/drivers/:id', adminMiddleware, async (req, res) => {
+  try {
+    const id = req.params.id;
+    // Release car first
+    await pool.query("UPDATE cars SET status='offline', current_driver_id=NULL, current_driver_name=NULL WHERE current_driver_id=$1", [id]).catch(()=>{});
+    // Delete driver_cars links
+    await pool.query('DELETE FROM driver_cars WHERE driver_id=$1', [id]).catch(()=>{});
+    // Delete driver
+    await pool.query('DELETE FROM drivers WHERE id=$1', [id]);
+    io.emit('driver:status', { driverId: parseInt(id), status: 'deleted' });
+    res.json({ ok: true });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
@@ -1552,6 +1568,8 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
 // ── ADD MISSING COLUMNS ON STARTUP ──
 async function ensureColumns() {
   const cols = [
+    "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS employment_type VARCHAR(50) DEFAULT 'hourly'",
+    "ALTER TABLE drivers ADD COLUMN IF NOT EXISTS current_car_id INTEGER",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS car_number INTEGER DEFAULT 1",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS car_total INTEGER DEFAULT 1",
