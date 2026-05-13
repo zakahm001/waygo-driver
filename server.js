@@ -1229,8 +1229,8 @@ app.patch('/bookings/:id/reassign', adminMiddleware, async (req, res) => {
 
     // Update booking
     await pool.query(
-      'UPDATE bookings SET driver_id=$1, driver_name=$2, status=$3 WHERE id=$4',
-      [new_driver_id, newDriver.name, 'assigned', bookingId]
+      'UPDATE bookings SET driver_id=$1, status=$2 WHERE id=$3',
+      [new_driver_id, 'assigned', bookingId]
     );
 
     // Update driver statuses
@@ -1375,6 +1375,7 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
 async function ensureColumns() {
   const cols = [
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS driver_name VARCHAR(200)",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT false",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guest_promo_accepted BOOLEAN DEFAULT false",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS trip_phase VARCHAR(20) DEFAULT 'driving'",
