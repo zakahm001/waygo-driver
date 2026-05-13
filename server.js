@@ -205,23 +205,48 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
 
 app.post('/bookings', async (req, res) => {
   try {
-    const { customer_name, customer_phone, from_address, to_address,
+    const { customer_name, customer_phone, customer_email, from_address, to_address,
       payment_method, fare_sek, scheduled_at, booking_type, customer_id,
-      passengers, child_seat, child_age, driver_note } = req.body;
+      passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted } = req.body;
+
+    // Add columns if they don't exist (safe idempotent)
+    await pool.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)').catch(()=>{});
+    await pool.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT false').catch(()=>{});
+    await pool.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guest_promo_accepted BOOLEAN DEFAULT false').catch(()=>{});
+
+    // Save promo preference for guest
+    if (is_guest && guest_promo_accepted && customer_email) {
+      await pool.query(
+        `INSERT INTO promo_subscriptions (email, phone, name, source, created_at)
+         VALUES ($1,$2,$3,'guest_booking',NOW())
+         ON CONFLICT (email) DO UPDATE SET phone=$2, name=$3`,
+        [customer_email, customer_phone || null, customer_name || null]
+      ).catch(()=>{}); // table may not exist yet - that's ok
+    }
+
     const ref = 'W-' + Date.now().toString().slice(-6);
     const r = await pool.query(
-      'INSERT INTO bookings (booking_ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type, customer_id, passengers, child_seat, child_age, driver_note) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14) RETURNING *',
-      [ref, customer_name, customer_phone, from_address, to_address, payment_method, fare_sek, scheduled_at||null, booking_type||'now', customer_id||null, passengers||1, child_seat||false, child_age||null, driver_note||null]
+      `INSERT INTO bookings (booking_ref, customer_name, customer_phone, customer_email,
+        from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type,
+        customer_id, passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+      [ref, customer_name, customer_phone, customer_email||null,
+       from_address, to_address, payment_method, fare_sek,
+       scheduled_at||null, booking_type||'now', customer_id||null,
+       passengers||1, child_seat||false, child_age||null, driver_note||null,
+       is_guest||false, guest_promo_accepted||false]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
+
+    // SMS confirmation
     if (booking.customer_phone) {
       sendSMS(booking.customer_phone,
-        'Trollhättan Cab: Din bokning ' + booking.booking_ref + ' är mottagen. Vi hittar en förare. Från: ' + booking.from_address
+        'Trollhättan Cab: Din bokning ' + booking.booking_ref + ' är mottagen! Vi hittar en förare åt dig. Från: ' + booking.from_address
       );
     }
+
     res.json({ booking });
-    // Notify drivers via dispatch
     notifyAvailableDrivers(booking);
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1171,6 +1196,16 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
     res.json({ bookings: r.rows });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
+
+// Create promo_subscriptions table if not exists
+pool.query(`CREATE TABLE IF NOT EXISTS promo_subscriptions (
+  id SERIAL PRIMARY KEY,
+  email VARCHAR(200) UNIQUE NOT NULL,
+  phone VARCHAR(50),
+  name VARCHAR(200),
+  source VARCHAR(50) DEFAULT 'guest_booking',
+  created_at TIMESTAMP DEFAULT NOW()
+)`).catch(e => console.log('promo table:', e.message));
 
 server.listen(PORT, () => {
   console.log('Trollhattan Cab API v5.5 on port ' + PORT);
