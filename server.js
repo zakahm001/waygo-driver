@@ -238,7 +238,8 @@ app.post('/bookings', async (req, res) => {
   try {
     const { customer_name, customer_phone, customer_email, from_address, to_address,
       payment_method, fare_sek, scheduled_at, booking_type, customer_id,
-      passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted } = req.body;
+      passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted,
+      car_number, car_total, booking_group, hold_dispatch } = req.body;
 
     // Add columns if they don't exist (safe idempotent)
     await pool.query('ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)').catch(()=>{});
@@ -271,13 +272,15 @@ app.post('/bookings', async (req, res) => {
     const r = await pool.query(
       `INSERT INTO bookings (booking_ref, customer_name, customer_phone, customer_email,
         from_address, to_address, payment_method, fare_sek, scheduled_at, booking_type,
-        customer_id, passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted)
-       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17) RETURNING *`,
+        customer_id, passengers, child_seat, child_age, driver_note, is_guest, guest_promo_accepted,
+        car_number, car_total, booking_group)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20) RETURNING *`,
       [ref, customer_name, customer_phone, customer_email||null,
        from_address, to_address, payment_method, fare_sek,
        scheduled_at||null, booking_type||'now', resolvedCustomerId,
        passengers||1, child_seat||false, child_age||null, driver_note||null,
-       is_guest||false, guest_promo_accepted||false]
+       is_guest||false, guest_promo_accepted||false,
+       car_number||1, car_total||1, booking_group||null]
     );
     const booking = r.rows[0];
     io.emit('booking:new', booking);
@@ -319,16 +322,35 @@ app.post('/bookings', async (req, res) => {
     }
 
     res.json({ booking, customer_linked: !!resolvedCustomerId });
-    notifyAvailableDrivers(booking);
+    // Don't dispatch Car 2 immediately — it waits for Car 1 to be accepted
+    if (!hold_dispatch) {
+      notifyAvailableDrivers(booking);
+    } else {
+      console.log('Car 2 booking created, holding dispatch until Car 1 accepted:', ref);
+      io.emit('dispatch:status', {
+        booking_id: booking.id, booking_ref: ref,
+        message: '⏳ Bil 2 av 2 väntar på att bil 1 bekräftas',
+        status: 'waiting_car1'
+      });
+    }
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
 // ── SIMPLE DISPATCH — notify all available drivers, first to accept wins ──
-async function notifyAvailableDrivers(booking) {
+async function notifyAvailableDrivers(booking, excludeDriverIds) {
+  excludeDriverIds = excludeDriverIds || [];
   try {
     const r = await pool.query(
       "SELECT * FROM drivers WHERE status='available' AND blocked=false AND (suspended_until IS NULL OR suspended_until < NOW()) ORDER BY last_active ASC NULLS FIRST"
     );
+    // Filter out excluded drivers (already assigned to Car 1 of same group)
+    const available = r.rows.filter(function(d) { return !excludeDriverIds.includes(d.id); });
+    if (available.length === 0 && r.rows.length > 0) {
+      // All available drivers excluded - use all
+      r.rows.splice(0, r.rows.length, ...r.rows);
+    } else {
+      r.rows.splice(0, r.rows.length, ...available);
+    }
     if (!r.rows.length) {
       io.emit('dispatch:status', {
         booking_id: booking.id,
@@ -408,6 +430,18 @@ app.patch('/bookings/:id/accept', async (req, res) => {
         'Trollhättan Cab: Din förare ' + booking.driver_name + ' är på väg! Bokning ' + booking.booking_ref + '. Skylt: ' + (booking.driver_plate||'')
       );
     }
+    // If Car 1 of 2-car group — dispatch Car 2 to different driver
+    if (booking.booking_group && booking.car_number === 1 && booking.car_total === 2) {
+      const car2 = await pool.query(
+        "SELECT * FROM bookings WHERE booking_group=$1 AND car_number=2 AND status='pending'",
+        [booking.booking_group]
+      );
+      if (car2.rows.length) {
+        console.log('Car 1 accepted - dispatching Car 2:', car2.rows[0].booking_ref);
+        setTimeout(function() { notifyAvailableDrivers(car2.rows[0], [parseInt(driverId)]); }, 1500);
+      }
+    }
+
     res.json({ success: true, booking });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
@@ -1408,6 +1442,9 @@ app.get('/economy/bookings', staffMiddleware, async (req, res) => {
 async function ensureColumns() {
   const cols = [
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS customer_email VARCHAR(200)",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS car_number INTEGER DEFAULT 1",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS car_total INTEGER DEFAULT 1",
+    "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS booking_group VARCHAR(50)",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS driver_name VARCHAR(200)",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS is_guest BOOLEAN DEFAULT false",
     "ALTER TABLE bookings ADD COLUMN IF NOT EXISTS guest_promo_accepted BOOLEAN DEFAULT false",
