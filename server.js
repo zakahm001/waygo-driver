@@ -804,6 +804,25 @@ app.post('/messages', async (req, res) => {
     );
     io.emit('message:new:' + r.rows[0].thread_key, r.rows[0]);
     io.emit('message:new', Object.assign({}, r.rows[0]));
+
+    // If staff/central sends message to customer — also send SMS
+    if (sender_role === 'staff' && thread_key.startsWith('customer-central-')) {
+      const bookingId = thread_key.replace('customer-central-', '');
+      try {
+        const bRes = await pool.query('SELECT * FROM bookings WHERE id=$1', [bookingId]);
+        const booking = bRes.rows[0];
+        if (booking && booking.customer_phone) {
+          await sendSMS(booking.customer_phone,
+            'Trollhättan Cab: ' + sender_name + ' skriver: ' + content +
+            ' (Bokning ' + booking.booking_ref + ')'
+          );
+        }
+      } catch(e) { console.log('Customer SMS error:', e.message); }
+    }
+
+    // If driver sends message — notify central via SMS if needed (optional)
+    // Already handled via socket
+
     res.json({ message: r.rows[0] });
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
