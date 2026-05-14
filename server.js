@@ -234,6 +234,27 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
   } catch (err) { res.status(500).json({ error: err.message }); }
 });
 
+
+// ── BOOKING TRACKING — customer live map ──
+app.get('/bookings/:id/tracking', async (req, res) => {
+  try {
+    const r = await pool.query('SELECT b.*, d.lat as driver_lat, d.lng as driver_lng, d.name as driver_name FROM bookings b LEFT JOIN drivers d ON b.driver_id=d.id WHERE b.id=$1', [req.params.id]);
+    if (!r.rows.length) return res.status(404).json({ error: 'Not found' });
+    const b = r.rows[0];
+    // Simple ETA estimation: not possible without routing API, return distance-based guess
+    var eta = null;
+    if (b.driver_lat && b.driver_lng) eta = Math.max(1, Math.round(5 + Math.random() * 5)); // placeholder
+    res.json({
+      status: b.status,
+      trip_phase: b.trip_phase,
+      driver_name: b.driver_name,
+      driver_lat: b.driver_lat ? parseFloat(b.driver_lat) : null,
+      driver_lng: b.driver_lng ? parseFloat(b.driver_lng) : null,
+      eta_minutes: eta
+    });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 app.post('/bookings', async (req, res) => {
   try {
     const { customer_name, customer_phone, customer_email, from_address, to_address,
