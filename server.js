@@ -235,6 +235,24 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
 });
 
 
+
+// ── BOOKING TRIP PHASE — for driver restore on refresh ──
+app.get('/bookings/:id/trip-phase', async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT id, status, trip_phase, driver_id FROM bookings WHERE id=$1',
+      [req.params.id]
+    );
+    if (!r.rows.length) return res.json({ trip_phase: 'driving' });
+    const b = r.rows[0];
+    res.json({
+      trip_phase: b.trip_phase || 'driving',
+      status: b.status,
+      driver_id: b.driver_id
+    });
+  } catch (err) { res.json({ trip_phase: 'driving' }); }
+});
+
 // ── BOOKING TRACKING — customer live map ──
 app.get('/bookings/:id/tracking', async (req, res) => {
   try {
