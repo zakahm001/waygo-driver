@@ -236,6 +236,28 @@ app.get('/my-bookings', authMiddleware, async (req, res) => {
 
 
 
+
+// ── DRIVER TRIP HISTORY ──
+app.get('/drivers/:id/bookings', authMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      'SELECT * FROM bookings WHERE driver_id=$1 ORDER BY created_at DESC LIMIT 50',
+      [req.params.id]
+    );
+    res.json({ bookings: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
+// ── ZONE OVERVIEW — driver counts per zone ──
+app.get('/zones/overview', authMiddleware, async (req, res) => {
+  try {
+    const r = await pool.query(
+      "SELECT id, name, status, lat, lng FROM drivers WHERE status != 'offline' AND lat IS NOT NULL AND lng IS NOT NULL"
+    );
+    res.json({ drivers: r.rows });
+  } catch (err) { res.status(500).json({ error: err.message }); }
+});
+
 // ── BOOKING TRIP PHASE — for driver restore on refresh ──
 app.get('/bookings/:id/trip-phase', async (req, res) => {
   try {
